@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f6f4a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Czujnik roślin</title>
+<style>
+  :root {
+    --bg: #f4f6f3; --card: #ffffff; --ink: #1d2420; --muted: #66706a; --line: #dde3de;
+    --accent: #1f6f4a; --accent-ink: #ffffff; --moist: #2a7fd4; --batt: #c9862b; --warn: #b3412f; --ok: #2e8b57;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121614; --card: #1b201d; --ink: #e6ebe7; --muted: #9aa49e; --line: #2c3430;
+            --accent: #3fa776; --accent-ink: #0d1310; --moist: #5aa6ef; --batt: #e0a24a; --warn: #e2735f; --ok: #5cc28c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 18px 16px 6px; max-width: 760px; margin: 0 auto; display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+  header h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  main { max-width: 760px; margin: 0 auto; padding: 8px 16px 40px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin: 12px 0; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+           border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .seg button { padding: 6px 12px; border-radius: 8px; font-size: 14px; }
+  .seg button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .stat { padding: 10px 12px; border-radius: 10px; background: var(--bg); }
+  .stat b { display: block; font-size: 26px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 13px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  canvas { width: 100%; height: 260px; display: block; touch-action: pan-y; }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .probes button { text-align: left; }
+  .err { color: var(--warn); }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  h3 { font-size: 14px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  details summary { cursor: pointer; color: var(--muted); }
+  .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  input { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--line); vertical-align: middle; }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--warn); }
+  .lang { flex-wrap: nowrap; gap: 4px; }
+  .lang button { padding: 4px 10px; font-size: 13px; }
+  .banner { border-radius: 12px; padding: 10px 12px; margin: 12px 0; font-size: 14px; border: 1px solid var(--line); }
+  .banner.warn { background: color-mix(in srgb, var(--warn) 12%, var(--card)); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+  .banner.info { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+  .banner b { display: block; margin-bottom: 2px; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; word-break: break-word; }
+  .probes button small { display: block; color: var(--muted); font-size: 12px; }
+  .probes button.stale small { color: var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 data-t="title">Plant sensor</h1>
+    <p data-t="subtitle">Press RST on the probe, then connect.</p>
+  </div>
+  <div class="row seg lang"><button data-lang="pl">PL</button><button data-lang="en">EN</button></div>
+</header>
+<main>
+  <div class="card">
+    <div class="row">
+      <button class="primary" id="connect" data-t="connect">Connect probe</button>
+      <button id="disconnect" disabled data-t="disconnect">Disconnect</button>
+      <button id="install" hidden data-t="install">Install app</button>
+      <span class="muted" id="state"></span>
+    </div>
+    <div class="bar"><i id="progress"></i></div>
+    <p class="muted err" id="error" hidden></p>
+  </div>
+
+  <div id="banners"></div>
+
+  <div class="card" id="probesCard" hidden>
+    <h2 data-t="saved">Saved probes</h2>
+    <div class="row probes" id="probes"></div>
+  </div>
+
+  <div id="probe" hidden>
+    <div class="card">
+      <h2 id="pname">–</h2>
+      <div id="pinfo" class="muted" style="margin:-6px 0 8px"></div>
+      <div class="stats">
+        <div class="stat"><span data-t="moist">Soil moisture</span><b id="sMoist">–</b></div>
+        <div class="stat"><span data-t="battery">Battery</span><b id="sBatt">–</b></div>
+        <div class="stat"><span data-t="stored">Readings in this phone</span><b id="sCount">–</b></div>
+        <div class="stat"><span data-t="last">Last reading</span><b id="sLast" style="font-size:18px">–</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0" data-t="history">History</h2>
+        <div class="row seg" id="ranges">
+          <button data-h="24" data-t="r24">24 h</button><button data-h="168" class="on" data-t="r7">7 days</button>
+          <button data-h="720" data-t="r30">30 days</button><button data-h="0" data-t="rall">All</button>
+        </div>
+      </div>
+      <canvas id="chart"></canvas>
+      <div class="legend"><span><i style="background:var(--moist)"></i><span data-t="lgMoist">Soil moisture %</span></span>
+        <span><i style="background:var(--batt)"></i><span data-t="lgBatt">Battery V</span></span></div>
+    </div>
+
+    <div class="card">
+      <h2 data-t="calib">Calibration</h2>
+      <p class="muted"><span data-t="calibHelp"></span>
+        <br><span data-t="calNow">Now</span>: <span data-t="dry">dry</span> <span id="cDry">–</span> V,
+        <span data-t="wet">wet</span> <span id="cWet">–</span> V, <span data-t="raw">raw</span> <span id="cRaw">–</span> V</p>
+      <div class="row">
+        <button id="bMeasure" disabled data-t="measure">Measure now</button>
+        <button id="bDry" disabled data-t="setDry">Set dry</button>
+        <button id="bWet" disabled data-t="setWet">Set wet</button>
+        <button id="bCsv" data-t="csv">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 data-t="settings">Probe settings</h2>
+      <p class="muted" data-t="settingsHelp">Only while connected.</p>
+      <p class="muted"><span class="dot" id="dWifi"></span><span data-t="wifiState">WiFi</span>
+        &nbsp; <span class="dot" id="dMqtt"></span><span data-t="mqttState">MQTT</span>
+        &nbsp; <span id="mode"></span></p>
+
+      <h3 data-t="hMeasure">Measuring</h3>
+      <div class="form">
+        <label><span data-t="logInt">Measure every (min)</span><input id="fLi" type="number" min="10" max="360" step="5"></label>
+        <label><span data-t="reportEvery">Send to MQTT every (readings)</span><input id="fRe" type="number" min="1" max="48" step="1"></label>
+        <label><span data-t="svcTo">Service mode timeout (min)</span><input id="fSt" type="number" min="5" max="240" step="5"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="bCfg" disabled data-t="save">Save</button></div>
+
+      <details style="margin-top:14px"><summary data-t="netTitle">WiFi / MQTT / web page (optional)</summary>
+        <h3 data-t="hWifi">WiFi</h3>
+        <div class="form">
+          <label><span data-t="ssid">Network name (SSID)</span><input id="fSsid" autocomplete="off"></label>
+          <label><span data-t="pass">Password</span><input id="fWpass" type="password" autocomplete="new-password"></label>
+        </div>
+        <div class="row" style="margin-top:10px"><button id="bWifi" disabled data-t="saveRestart">Save and restart</button></div>
+
+        <h3 data-t="hMqtt">MQTT (Home Assistant)</h3>
+        <div class="form">
+          <label><span data-t="host">Broker (IP or name)</span><input id="fHost" autocomplete="off"></label>
+          <label><span data-t="port">Port</span><input id="fPort" type="number" min="1" max="65535"></label>
+          <label><span data-t="user">User</span><input id="fUser" autocomplete="off"></label>
+          <label><span data-t="pass">Password</span><input id="fMpass" type="password" autocomplete="new-password" data-tp="keepPass"></label>
+        </div>
+        <div class="row" style="margin-top:10px"><button id="bMqtt" disabled data-t="saveRestart">Save and restart</button></div>
+
+        <h3 data-t="hWeb">Web page login</h3>
+        <div class="form">
+          <label><span data-t="user">User</span><input id="fWuser" autocomplete="off"></label>
+          <label><span data-t="pass">Password</span><input id="fWebpass" type="password" autocomplete="new-password"></label>
+        </div>
+        <div class="row" style="margin-top:10px"><button id="bWeb" disabled data-t="saveRestart">Save and restart</button></div>
+      </details>
+
+      <details style="margin-top:14px"><summary data-t="diag">Diagnostics</summary>
+        <p class="muted" style="margin:8px 0 4px"><span data-t="bootHist">Boot history (newest first)</span>:</p>
+        <div class="mono" id="bootHist">–</div>
+        <p class="muted" style="margin:10px 0 0"><span data-t="probeLog">Probe memory</span>: <span id="logFill">–</span></p>
+      </details>
+
+      <details style="margin-top:14px"><summary data-t="more">More</summary>
+        <div class="row" style="margin-top:8px">
+          <button id="bForget" data-t="forget">Forget this probe's history here</button>
+          <button id="bClear" disabled data-t="clearLog">Erase the probe's log</button>
+          <button id="bOff" disabled data-t="powerOff">Power off the probe</button>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 data-t="backup">Backup</h2>
+    <p class="muted" id="backupInfo"></p>
+    <div class="row">
+      <button id="bBackup" data-t="backupSave">Save backup</button>
+      <button id="bRestore" data-t="backupLoad">Restore from backup</button>
+      <input id="fRestore" type="file" accept=".json,application/json" hidden>
+    </div>
+  </div>
+
+  <p class="muted" data-t="footer"></p>
+</main>
+
+<script>
+const T = {
+  en: {
+    title: "Plant sensor", subtitle: "Press RST on the probe (it keeps Bluetooth on for 2 minutes), then connect.",
+    connect: "Connect probe", disconnect: "Disconnect", install: "Install app", saved: "Saved probes", moist: "Soil moisture", battery: "Battery",
+    stored: "Readings in this phone", last: "Last reading", history: "History", r24: "24 h", r7: "7 days", r30: "30 days", rall: "All",
+    lgMoist: "Soil moisture %", lgBatt: "Battery V", calib: "Calibration",
+    calibHelp: 'Dry soil: wait for a reading, then "Set dry". After watering: "Set wet".', calNow: "Now", dry: "dry", wet: "wet", raw: "raw",
+    measure: "Measure now", setDry: "Set dry", setWet: "Set wet", csv: "Export CSV",
+    settings: "Probe settings", settingsHelp: "Only while connected. WiFi and MQTT changes restart the probe.",
+    wifiState: "WiFi", mqttState: "MQTT", hMeasure: "Measuring", logInt: "Measure every (min)",
+    reportEvery: "Send to MQTT every (readings)", svcTo: "Service mode timeout (min)", save: "Save",
+    netTitle: "WiFi / MQTT / web page (optional, not needed for phone-only use)",
+    hWifi: "WiFi", ssid: "Network name (SSID)", pass: "Password", saveRestart: "Save and restart",
+    hWeb: "Web page login", askWeb: "Save the web page login and restart the probe?", needWeb: "Enter user and password.",
+    hMqtt: "MQTT (Home Assistant)", host: "Broker (IP or name)", port: "Port", user: "User", keepPass: "unchanged",
+    modePhone: "mode: phone only", modeNet: "mode: WiFi + MQTT and phone", svcOn: "service mode is ON",
+    diag: "Diagnostics", bootHist: "Boot history (newest first)", probeLog: "Probe memory",
+    logFillTxt: (n, c) => `${n} of ${c} readings (${Math.round(100 * n / Math.max(1, c))} %)`,
+    powerOff: "Power off the probe", askOff: "Power the probe off? It stops measuring until you press RST (it then starts in service mode).", offDone: "The probe is off. Press RST to start it.",
+    more: "More", forget: "Forget this probe's history here", clearLog: "Erase the probe's log",
+    backup: "Backup", backupSave: "Save backup", backupLoad: "Restore from backup",
+    backupNever: "No backup yet. The history lives in this browser: save a backup now and then (e.g. to Google Drive).",
+    backupLast: (d) => `Last backup: ${d}.`, restored: (n) => `Restored: ${n} probe(s).`, badBackup: "This is not a plant sensor backup file.",
+    persistNo: "The browser may delete this data when storage runs low – install the app and keep backups.",
+    footer: 'Works offline once opened. Chrome / Edge on Android, Windows, macOS, ChromeOS. iPhone: use the free "Bluefy" browser (Safari has no Web Bluetooth). Each phone keeps its own history; the probe keeps its last ~16 000 readings.',
+    notConnected: "Not connected", connecting: "Connecting…", downloading: "Downloading history…",
+    connectedTo: (n, k) => `Connected to ${n} – ${k} new reading${k === 1 ? "" : "s"}`,
+    disconnectedShow: (n) => `Disconnected – showing saved history of ${n}`,
+    noBt: "This browser has no Web Bluetooth. Use Chrome on Android/PC, or Bluefy on iPhone.",
+    btErr: (m) => `Bluetooth: ${m} – press RST on the probe and try again.`,
+    oneReading: "Only one reading in this range", noReadings: "No readings in this range yet",
+    askDry: "Use the current reading as DRY?", askWet: "Use the current reading as WET?",
+    askForget: (n) => `Forget the saved history of ${n} in this browser?`,
+    askClear: "Erase the measurement log stored ON THE PROBE? (The copy in this browser stays.)",
+    askWifi: (s) => `Save WiFi "${s}" and restart the probe?`, askMqtt: "Save MQTT settings and restart the probe?",
+    saved_: "Saved", restarting: "Saved – the probe restarts. Press RST and connect again in a minute.",
+    needSsid: "Enter the WiFi network name.",
+    ago: (d) => d < 1 ? "today" : d < 2 ? "yesterday" : `${Math.floor(d)} days ago`, synced: "synced",
+    staleT: "Not synced for a while", staleB: (n, d) => `${n}: last sync ${d}. Press RST on the probe and connect, so its clock stays right and nothing is lost.`,
+    battT: "Battery low", battB: (n, v) => `${n}: ${v} V – charge it over USB-C soon.`,
+    fullT: "Probe memory almost full", fullB: (n) => `${n}: the oldest readings will be overwritten. Sync regularly (the phone keeps everything).`,
+    backupT: "Time for a backup", backupB: "Save a backup of the history (button at the bottom).",
+    csvHead: "time_utc,local_time,soil_moisture_pct,battery_v"
+  },
+  pl: {
+    title: "Czujnik roślin", subtitle: "Naciśnij RST na sondzie (Bluetooth działa wtedy 2 minuty) i połącz.",
+    connect: "Połącz z sondą", disconnect: "Rozłącz", install: "Zainstaluj aplikację", saved: "Zapisane sondy", moist: "Wilgotność gleby", battery: "Bateria",
+    stored: "Pomiary w telefonie", last: "Ostatni pomiar", history: "Historia", r24: "24 h", r7: "7 dni", r30: "30 dni", rall: "Wszystko",
+    lgMoist: "Wilgotność gleby %", lgBatt: "Bateria V", calib: "Kalibracja",
+    calibHelp: 'Sucha gleba: poczekaj na pomiar i naciśnij „Ustaw sucho”. Po podlaniu: „Ustaw mokro”.', calNow: "Teraz", dry: "sucho", wet: "mokro", raw: "odczyt",
+    measure: "Zmierz teraz", setDry: "Ustaw sucho", setWet: "Ustaw mokro", csv: "Eksport CSV",
+    settings: "Ustawienia sondy", settingsHelp: "Tylko podczas połączenia. Zmiana WiFi lub MQTT restartuje sondę.",
+    wifiState: "WiFi", mqttState: "MQTT", hMeasure: "Pomiary", logInt: "Pomiar co (min)",
+    reportEvery: "Wysyłka do MQTT co (pomiarów)", svcTo: "Limit trybu serwisowego (min)", save: "Zapisz",
+    netTitle: "WiFi / MQTT / strona www (opcjonalnie, niepotrzebne przy pracy tylko z telefonem)",
+    hWifi: "WiFi", ssid: "Nazwa sieci (SSID)", pass: "Hasło", saveRestart: "Zapisz i zrestartuj",
+    hWeb: "Logowanie do strony www", askWeb: "Zapisać login strony www i zrestartować sondę?", needWeb: "Wpisz użytkownika i hasło.",
+    hMqtt: "MQTT (Home Assistant)", host: "Broker (IP lub nazwa)", port: "Port", user: "Użytkownik", keepPass: "bez zmian",
+    modePhone: "tryb: tylko telefon", modeNet: "tryb: WiFi + MQTT i telefon", svcOn: "tryb serwisowy WŁĄCZONY",
+    diag: "Diagnostyka", bootHist: "Historia uruchomień (najnowsze pierwsze)", probeLog: "Pamięć sondy",
+    logFillTxt: (n, c) => `${n} z ${c} pomiarów (${Math.round(100 * n / Math.max(1, c))} %)`,
+    powerOff: "Wyłącz sondę", askOff: "Wyłączyć sondę? Przestanie mierzyć, aż naciśniesz RST (uruchomi się wtedy w trybie serwisowym).", offDone: "Sonda wyłączona. Naciśnij RST, aby ją włączyć.",
+    more: "Więcej", forget: "Usuń historię tej sondy z telefonu", clearLog: "Wyczyść historię w sondzie",
+    backup: "Kopia zapasowa", backupSave: "Zapisz kopię", backupLoad: "Przywróć z kopii",
+    backupNever: "Brak kopii. Historia jest zapisana w tej przeglądarce – co jakiś czas zapisz kopię (np. na Dysk Google).",
+    backupLast: (d) => `Ostatnia kopia: ${d}.`, restored: (n) => `Przywrócono sond: ${n}.`, badBackup: "To nie jest plik kopii czujnika roślin.",
+    persistNo: "Przeglądarka może usunąć te dane przy braku miejsca – zainstaluj aplikację i rób kopie.",
+    footer: "Po pierwszym otwarciu działa bez internetu. Chrome / Edge na Androidzie, Windows, macOS i ChromeOS. iPhone: darmowa przeglądarka „Bluefy” (Safari nie obsługuje Web Bluetooth). Każdy telefon ma własną historię; sonda pamięta ostatnie ~16 000 pomiarów.",
+    notConnected: "Nie połączono", connecting: "Łączenie…", downloading: "Pobieranie historii…",
+    connectedTo: (n, k) => `Połączono z ${n} – nowych pomiarów: ${k}`,
+    disconnectedShow: (n) => `Rozłączono – zapisana historia ${n}`,
+    noBt: "Ta przeglądarka nie obsługuje Web Bluetooth. Użyj Chrome na Androidzie/PC lub Bluefy na iPhonie.",
+    btErr: (m) => `Bluetooth: ${m} – naciśnij RST na sondzie i spróbuj ponownie.`,
+    oneReading: "Tylko jeden pomiar w tym zakresie", noReadings: "Brak pomiarów w tym zakresie",
+    askDry: "Użyć bieżącego odczytu jako SUCHO?", askWet: "Użyć bieżącego odczytu jako MOKRO?",
+    askForget: (n) => `Usunąć zapisaną historię ${n} z tej przeglądarki?`,
+    askClear: "Wyczyścić historię zapisaną W SONDZIE? (Kopia w tej przeglądarce zostaje.)",
+    askWifi: (s) => `Zapisać WiFi „${s}” i zrestartować sondę?`, askMqtt: "Zapisać ustawienia MQTT i zrestartować sondę?",
+    saved_: "Zapisano", restarting: "Zapisano – sonda się restartuje. Za minutę naciśnij RST i połącz ponownie.",
+    needSsid: "Wpisz nazwę sieci WiFi.",
+    ago: (d) => d < 1 ? "dziś" : d < 2 ? "wczoraj" : `${Math.floor(d)} dni temu`, synced: "synchronizacja",
+    staleT: "Dawno bez synchronizacji", staleB: (n, d) => `${n}: ostatnio ${d}. Naciśnij RST na sondzie i połącz – zegar sondy będzie dokładny i nic nie zginie.`,
+    battT: "Słaba bateria", battB: (n, v) => `${n}: ${v} V – wkrótce naładuj przez USB-C.`,
+    fullT: "Pamięć sondy prawie pełna", fullB: (n) => `${n}: najstarsze pomiary będą nadpisywane. Synchronizuj regularnie (telefon trzyma wszystko).`,
+    backupT: "Czas na kopię", backupB: "Zapisz kopię historii (przycisk na dole strony).",
+    csvHead: "czas_utc,czas_lokalny,wilgotnosc_gleby_proc,bateria_v"
+  }
+};
+let lang = (() => { try { return localStorage.getItem("ps-lang") || ((navigator.language || "").toLowerCase().startsWith("pl") ? "pl" : "en"); } catch { return "pl"; } })();
+const t = (k, ...a) => { const v = (T[lang] && T[lang][k]) ?? T.en[k]; return typeof v === "function" ? v(...a) : v; };
+
+const SVC = "7c1e0001-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const CH_STATUS = "7c1e0002-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const CH_CMD = "7c1e0003-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const CH_DATA = "7c1e0004-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const US = "\x1f";
+const STALE_DAYS = 7, BACKUP_DAYS = 30, LOW_BATT = 3.05;
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder(), dec = new TextDecoder();
+let dev = null, chStatus = null, chCmd = null, chData = null, status = {}, current = null, rangeH = 168;
+let persisted = true;
+
+// ------------------------------------------------------------------ storage: IndexedDB (+ old localStorage import)
+const DB = {
+  db: null, probes: new Map(), meta: {},
+  open() {
+    return new Promise((res) => {
+      if (!window.indexedDB) return res(false);
+      const rq = indexedDB.open("plant-sensor", 1);
+      rq.onupgradeneeded = () => { const d = rq.result; d.createObjectStore("probes", { keyPath: "name" }); d.createObjectStore("meta"); };
+      rq.onsuccess = () => { this.db = rq.result; res(true); };
+      rq.onerror = () => res(false);
+    });
+  },
+  tx(store, mode, fn) {
+    return new Promise((res, rej) => { const tx = this.db.transaction(store, mode); const r = fn(tx.objectStore(store)); tx.oncomplete = () => res(r && r.result); tx.onerror = () => rej(tx.error); });
+  },
+  async init() {
+    const ok = await this.open();
+    if (ok) {
+      const all = await this.tx("probes", "readonly", (s) => s.getAll());
+      (all || []).forEach((p) => this.probes.set(p.name, p));
+      this.meta = (await this.tx("meta", "readonly", (s) => s.get("meta"))) || {};
+    }
+    // import data of the old page version (localStorage "ps:<name>"), once
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i); if (!k.startsWith("ps:")) continue;
+        const name = k.slice(3), old = JSON.parse(localStorage.getItem(k)) || { recs: [] };
+        const p = this.get(name); if (merge(p.recs, old.recs || [])) { p.last = p.last || old.last; await this.put(p); }
+      }
+    } catch {}
+  },
+  get(name) { if (!this.probes.has(name)) this.probes.set(name, { name, recs: [], last: null, sync: 0 }); return this.probes.get(name); },
+  names() { return [...this.probes.keys()].filter((n) => this.probes.get(n).recs.length || this.probes.get(n).sync).sort(); },
+  async put(p) { this.probes.set(p.name, p); if (this.db) await this.tx("probes", "readwrite", (s) => s.put(p)); else try { localStorage.setItem("ps:" + p.name, JSON.stringify(p)); } catch {} },
+  async del(name) { this.probes.delete(name); if (this.db) await this.tx("probes", "readwrite", (s) => s.delete(name)); try { localStorage.removeItem("ps:" + name); } catch {} },
+  async setMeta(k, v) { this.meta[k] = v; if (this.db) await this.tx("meta", "readwrite", (s) => s.put(this.meta, "meta")); }
+};
+// add records that are not there yet (by time), keep sorted; returns how many were added
+function merge(recs, add) {
+  const have = new Set(recs.map((r) => r.t)); let n = 0;
+  add.forEach((r) => { if (r.t && !have.has(r.t)) { recs.push({ t: r.t, m: r.m, v: r.v }); have.add(r.t); n++; } });
+  if (n) recs.sort((a, b) => a.t - b.t);
+  return n;
+}
+
+function setState(s) { $("state").textContent = s; }
+function setErr(s) { $("error").hidden = !s; $("error").textContent = s || ""; }
+function setProgress(f) { $("progress").style.width = Math.round(Math.max(0, Math.min(1, f)) * 100) + "%"; }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const connected = () => dev && dev.gatt && dev.gatt.connected;
+const days = (ms) => (Date.now() - ms) / 86400000;
+const fmtDate = (ms) => new Date(ms).toLocaleDateString(lang, { day: "numeric", month: "short", year: "numeric" });
+
+// ------------------------------------------------------------------ Bluetooth
+async function cmd(text) { await chCmd.writeValueWithResponse(enc.encode(text)); await sleep(60); }
+async function readStatus() {
+  const v = dec.decode(await chStatus.readValue());
+  const s = {};
+  v.split(";").forEach((kv) => { const i = kv.indexOf("="); if (i > 0) s[kv.slice(0, i)] = kv.slice(i + 1); });
+  status = s; return s;
+}
+async function readChunk(start) {
+  await cmd("R" + start);
+  const dv = await chData.readValue();
+  const total = dv.getUint32(4, true), n = dv.getUint8(8), recs = [];
+  for (let i = 0; i < n; i++) {
+    const o = 9 + i * 8;
+    recs.push({ t: dv.getUint32(o, true), m: dv.getUint16(o + 4, true) / 10, v: dv.getUint16(o + 6, true) / 1000 });
+  }
+  return { total, recs };
+}
+// readings without a clock (after RST or a battery change, before the phone set the time) get a
+// time estimated from the neighbouring reading that has one and the log interval
+function fillTimes(recs, liMin) {
+  const step = (liMin || 60) * 60;
+  for (let i = recs.length - 2; i >= 0; i--) if (!recs[i].t && recs[i + 1].t) recs[i].t = recs[i + 1].t - step;
+  for (let i = 1; i < recs.length; i++) if (!recs[i].t && recs[i - 1].t) recs[i].t = recs[i - 1].t + step;
+  return recs.filter((r) => r.t);
+}
+async function download() {
+  const p = DB.get(status.name);
+  const lastT = p.recs.length ? p.recs[p.recs.length - 1].t : 0;
+  const total = +status.n || 0;
+  let got = [], start = total;
+  setState(t("downloading"));
+  while (start > 0) {                                  // newest first, stop at what we already have
+    const end = start;
+    start = Math.max(0, start - 60);
+    const recs = (await readChunk(start)).recs.slice(0, end - start);
+    got = recs.concat(got);
+    setProgress((total - start) / Math.max(1, total));
+    if (lastT && recs.length && recs[0].t && recs[0].t <= lastT) break;
+  }
+  const n = merge(p.recs, fillTimes(got, +status.li).filter((r) => r.t > lastT));
+  p.last = { m: +status.m, v: +status.vb, at: Date.now() };
+  p.sync = Date.now(); p.fw = status.fw || ""; p.li = +status.li || 60;
+  await DB.put(p);
+  setProgress(1);
+  return n;
+}
+async function connect() {
+  setErr("");
+  if (!navigator.bluetooth) { setErr(t("noBt")); return; }
+  try {
+    dev = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: "plant-sensor" }], optionalServices: [SVC] });
+    dev.addEventListener("gattserverdisconnected", onDisconnected);
+    setState(t("connecting")); setProgress(0);
+    let server = null;
+    for (let i = 0; i < 3 && !server; i++) { try { server = await dev.gatt.connect(); } catch (e) { if (i === 2) throw e; await sleep(800); } }
+    const svc = await server.getPrimaryService(SVC);
+    chStatus = await svc.getCharacteristic(CH_STATUS);
+    chCmd = await svc.getCharacteristic(CH_CMD);
+    chData = await svc.getCharacteristic(CH_DATA);
+    await cmd("T" + Math.floor(Date.now() / 1000));   // give the probe the time
+    await sleep(300);
+    await readStatus();
+    current = status.name || dev.name;
+    show(current); fillSettings();
+    const n = await download();
+    setState(t("connectedTo", current, n));
+    toggleButtons(true); show(current); listProbes(); banners();
+    askPersist();
+  } catch (e) {
+    if (e && e.name === "NotFoundError") { setState(t("notConnected")); return; }
+    setErr(t("btErr", e && e.message ? e.message : e));
+    setState(t("notConnected"));
+  }
+}
+function onDisconnected() { toggleButtons(false); setState(current ? t("disconnectedShow", current) : t("notConnected")); }
+function toggleButtons(on) {
+  ["bMeasure", "bDry", "bWet", "bClear", "disconnect", "bCfg", "bWifi", "bMqtt", "bWeb", "bOff"].forEach((id) => ($(id).disabled = !on));
+  $("connect").disabled = on;
+}
+async function askPersist() {
+  try { if (navigator.storage && navigator.storage.persist) persisted = (await navigator.storage.persisted()) || (await navigator.storage.persist()); } catch {}
+  banners();
+}
+
+// ------------------------------------------------------------------ view
+function fillSettings() {
+  $("fLi").value = status.li || ""; $("fRe").value = status.re || ""; $("fSt").value = status.st || "";
+  $("fHost").value = status.mh || ""; $("fPort").value = status.mp || 1883; $("fUser").value = status.mu || "";
+  $("fMpass").value = ""; $("fWpass").value = ""; $("fWebpass").value = ""; $("fWuser").value = status.wu || "";
+  $("dWifi").className = "dot " + (status.wc === "1" ? "ok" : status.mh ? "bad" : "");
+  $("dMqtt").className = "dot " + (status.mc === "1" ? "ok" : status.mh ? "bad" : "");
+  $("mode").textContent = (status.mh ? t("modeNet") : t("modePhone")) + (status.svc === "1" ? " · " + t("svcOn") : "");
+  $("bootHist").textContent = status.bh || "–";
+  $("logFill").textContent = status.cap ? t("logFillTxt", +status.n, +status.cap) : "–";
+}
+function fmtTime(ts) { const d = new Date(ts * 1000); return d.toLocaleDateString(lang, { day: "numeric", month: "short" }) + " " + d.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }); }
+function show(name) {
+  current = name; const p = DB.get(name);
+  const live = connected() && status.name === name;
+  $("probe").hidden = false; $("pname").textContent = name;
+  const info = [];
+  if (live && status.fw) info.push("Firmware " + status.fw); else if (p.fw) info.push("Firmware " + p.fw);
+  if (p.sync) info.push(t("synced") + ": " + t("ago", days(p.sync)));
+  $("pinfo").textContent = info.join(" · ");
+  const m = live ? +status.m : p.last && p.last.m, v = live ? +status.vb : p.last && p.last.v;
+  $("sMoist").textContent = m != null && !isNaN(m) ? Math.round(m) + " %" : "–";
+  $("sBatt").textContent = v ? v.toFixed(2) + " V" : "–";
+  $("sCount").textContent = p.recs.length;
+  $("sLast").textContent = p.recs.length ? fmtTime(p.recs[p.recs.length - 1].t) : "–";
+  $("cDry").textContent = live ? status.dry : "–"; $("cWet").textContent = live ? status.wet : "–"; $("cRaw").textContent = live ? status.raw : "–";
+  if (!live) { $("bootHist").textContent = "–"; $("logFill").textContent = "–"; }
+  draw();
+}
+function listProbes() {
+  const names = DB.names(); $("probesCard").hidden = names.length === 0; const box = $("probes"); box.innerHTML = "";
+  names.forEach((n) => {
+    const p = DB.get(n), b = document.createElement("button");
+    const stale = p.sync && days(p.sync) > STALE_DAYS;
+    b.className = stale ? "stale" : "";
+    b.innerHTML = "";
+    b.append(`${n} · ${p.last && p.last.m != null ? Math.round(p.last.m) + " %" : "–"}`);
+    const sm = document.createElement("small"); sm.textContent = p.sync ? t("synced") + ": " + t("ago", days(p.sync)) : ""; b.append(sm);
+    b.onclick = () => show(n); box.appendChild(b);
+  });
+}
+function banner(kind, title, body) { const d = document.createElement("div"); d.className = "banner " + kind; const b = document.createElement("b"); b.textContent = title; d.append(b, body); return d; }
+function banners() {
+  const box = $("banners"); box.innerHTML = "";
+  DB.names().forEach((n) => {
+    const p = DB.get(n);
+    if (p.sync && days(p.sync) > STALE_DAYS) box.append(banner("warn", t("staleT"), t("staleB", n, t("ago", days(p.sync)))));
+    const v = p.last && p.last.v; if (v && v < LOW_BATT) box.append(banner("warn", t("battT"), t("battB", n, v.toFixed(2))));
+  });
+  if (connected() && status.cap && +status.n / +status.cap > 0.9) box.append(banner("warn", t("fullT"), t("fullB", status.name)));
+  const any = DB.names().some((n) => DB.get(n).recs.length);
+  const lb = DB.meta.backup || 0;
+  if (any && (!lb || days(lb) > BACKUP_DAYS)) box.append(banner("info", t("backupT"), t("backupB")));
+  if (any && !persisted) box.append(banner("info", "", t("persistNo")));
+  $("backupInfo").textContent = lb ? t("backupLast", fmtDate(lb)) : t("backupNever");
+}
+
+function draw() {
+  const cv = $("chart"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  cv.width = W * dpr; cv.height = H * dpr; const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+  const css = getComputedStyle(document.documentElement), col = (n) => css.getPropertyValue(n).trim();
+  const all = current ? DB.get(current).recs : [];
+  const now = Date.now() / 1000, from = rangeH ? now - rangeH * 3600 : (all.length ? all[0].t : now - 86400);
+  const recs = all.filter((r) => r.t >= from);
+  const L = 40, R = 44, Tp = 10, B = 26, pw = W - L - R, ph = H - Tp - B;
+  g.font = "12px system-ui, sans-serif"; g.fillStyle = col("--muted"); g.strokeStyle = col("--line"); g.lineWidth = 1;
+  for (let p = 0; p <= 100; p += 25) { const y = Tp + ph - (p / 100) * ph; g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.textAlign = "right"; g.fillText(p + "%", L - 6, y + 4); }
+  const vmin = 2.8, vmax = 3.6;
+  g.textAlign = "left"; for (let v = vmin; v <= vmax + 1e-6; v += 0.2) g.fillText(v.toFixed(1), L + pw + 6, Tp + ph - ((v - vmin) / (vmax - vmin)) * ph + 4);
+  if (recs.length < 2) { g.textAlign = "center"; g.fillText(recs.length ? t("oneReading") : t("noReadings"), L + pw / 2, Tp + ph / 2); return; }
+  const t0 = rangeH ? from : recs[0].t, t1 = now, X = (ts) => L + ((ts - t0) / (t1 - t0)) * pw;
+  const ticks = W < 520 ? 3 : 5;
+  for (let i = 0; i <= ticks; i++) { const ts = t0 + (i / ticks) * (t1 - t0), d = new Date(ts * 1000);
+    const lab = (t1 - t0) <= 2 * 86400 ? d.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : d.toLocaleDateString(lang, { day: "numeric", month: "short" });
+    g.textAlign = i === 0 ? "left" : i === ticks ? "right" : "center"; g.fillText(lab, X(ts), H - 8); }
+  const li = (connected() && +status.li) || DB.get(current).li || 60;
+  const gap = 3 * 60 * li;
+  const line = (key, color, y) => { g.strokeStyle = color; g.lineWidth = 2; g.beginPath(); let prev = null;
+    recs.forEach((r) => { const x = X(r.t), yy = y(r[key]); if (prev === null || r.t - prev > gap) g.moveTo(x, yy); else g.lineTo(x, yy); prev = r.t; }); g.stroke(); };
+  line("v", col("--batt"), (v) => Tp + ph - ((Math.min(vmax, Math.max(vmin, v)) - vmin) / (vmax - vmin)) * ph);
+  line("m", col("--moist"), (m) => Tp + ph - (m / 100) * ph);
+}
+
+// ------------------------------------------------------------------ files: CSV, backup, restore
+async function saveFile(name, text, type) {
+  const file = new File([text], name, { type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return true; } catch (e) { if (e && e.name === "AbortError") return false; }
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return true;
+}
+function exportCsv() {
+  if (!current) return; const p = DB.get(current);
+  const rows = [t("csvHead")].concat(p.recs.map((r) => `${new Date(r.t * 1000).toISOString()},${new Date(r.t * 1000).toLocaleString(lang).replace(/,/g, "")},${r.m.toFixed(1)},${r.v.toFixed(3)}`));
+  saveFile(`${current}.csv`, rows.join("\n"), "text/csv");
+}
+async function backup() {
+  const data = { app: "plant-sensor", version: 1, saved: new Date().toISOString(), probes: DB.names().map((n) => DB.get(n)) };
+  const day = new Date().toISOString().slice(0, 10);
+  if (await saveFile(`plant-sensor-backup-${day}.json`, JSON.stringify(data), "application/json")) { await DB.setMeta("backup", Date.now()); banners(); }
+}
+async function restore(file) {
+  setErr("");
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.app !== "plant-sensor" || !Array.isArray(data.probes)) throw new Error("format");
+    for (const q of data.probes) {
+      if (!q || !q.name || !Array.isArray(q.recs)) continue;
+      const p = DB.get(q.name); merge(p.recs, q.recs);
+      p.last = p.last || q.last || null; p.sync = Math.max(p.sync || 0, q.sync || 0); p.fw = p.fw || q.fw; p.li = p.li || q.li;
+      await DB.put(p);
+    }
+    setState(t("restored", data.probes.length)); listProbes(); banners();
+    const names = DB.names(); if (names.length) show(current && names.includes(current) ? current : names[0]);
+  } catch { setErr(t("badBackup")); }
+}
+async function refresh() { await sleep(400); await readStatus(); show(current); fillSettings(); }
+
+// ------------------------------------------------------------------ buttons
+$("connect").onclick = connect;
+$("disconnect").onclick = () => connected() && dev.gatt.disconnect();
+$("bMeasure").onclick = async () => { await cmd("M"); await sleep(300); await refresh(); };
+$("bDry").onclick = async () => { if (confirm(t("askDry"))) { await cmd("D"); await refresh(); } };
+$("bWet").onclick = async () => { if (confirm(t("askWet"))) { await cmd("W"); await refresh(); } };
+$("bCsv").onclick = exportCsv;
+$("bCfg").onclick = async () => {
+  await cmd(["CFG", $("fLi").value || status.li, $("fRe").value || status.re, $("fSt").value || status.st].join(US));
+  await refresh(); setState(t("saved_"));
+};
+$("bWifi").onclick = async () => {
+  const ssid = $("fSsid").value.trim(); if (!ssid) { setErr(t("needSsid")); return; } setErr("");
+  if (!confirm(t("askWifi", ssid))) return;
+  await cmd(["WIFI", ssid, $("fWpass").value].join(US)); setState(t("restarting"));
+};
+$("bMqtt").onclick = async () => {
+  if (!confirm(t("askMqtt"))) return;
+  const pw = $("fMpass").value === "" ? "<keep>" : $("fMpass").value;
+  await cmd(["MQTT", $("fHost").value.trim(), $("fPort").value || 1883, $("fUser").value.trim(), pw].join(US)); setState(t("restarting"));
+};
+$("bWeb").onclick = async () => {
+  const u = $("fWuser").value.trim(), pw = $("fWebpass").value; if (!u || !pw) { setErr(t("needWeb")); return; } setErr("");
+  if (!confirm(t("askWeb"))) return;
+  await cmd(["WEB", u, pw].join(US)); setState(t("restarting"));
+};
+$("bOff").onclick = async () => { if (!confirm(t("askOff"))) return; await cmd("OFF"); setState(t("offDone")); };
+$("bForget").onclick = async () => { if (current && confirm(t("askForget", current))) { await DB.del(current); listProbes(); banners(); const n = DB.names(); if (n.length) show(n[0]); else $("probe").hidden = true; } };
+$("bClear").onclick = async () => { if (confirm(t("askClear"))) { await cmd("CLEARLOG"); await sleep(1800); await refresh(); } };
+$("bBackup").onclick = backup;
+$("bRestore").onclick = () => $("fRestore").click();
+$("fRestore").onchange = (e) => { const f = e.target.files[0]; if (f) restore(f); e.target.value = ""; };
+document.querySelectorAll("#ranges button").forEach((b) => (b.onclick = () => {
+  document.querySelectorAll("#ranges button").forEach((x) => x.classList.remove("on")); b.classList.add("on"); rangeH = +b.dataset.h; draw(); }));
+document.querySelectorAll("[data-lang]").forEach((b) => (b.onclick = () => { lang = b.dataset.lang; try { localStorage.setItem("ps-lang", lang); } catch {} applyLang(); }));
+window.addEventListener("resize", draw);
+
+// install as an app (Android/desktop Chrome)
+let installEvt = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; $("install").hidden = false; });
+$("install").onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("install").hidden = true; };
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  document.querySelectorAll("[data-t]").forEach((el) => (el.textContent = t(el.dataset.t)));
+  document.querySelectorAll("[data-tp]").forEach((el) => (el.placeholder = t(el.dataset.tp)));
+  document.querySelectorAll("[data-lang]").forEach((b) => b.classList.toggle("on", b.dataset.lang === lang));
+  if (!connected()) setState(current ? t("disconnectedShow", current) : t("notConnected"));
+  if (connected()) fillSettings();
+  listProbes(); banners();
+  if (current) show(current);
+}
+(async () => {
+  await DB.init();
+  try { if (navigator.storage && navigator.storage.persisted) persisted = await navigator.storage.persisted(); } catch {}
+  const names = DB.names(); if (names.length) current = names[0];
+  applyLang();
+})();
+</script>
+</body>
+</html>

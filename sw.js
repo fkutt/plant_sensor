@@ -1,5 +1,5 @@
 // Offline cache for the plant sensor page. Change VERSION when you upload new files.
-const VERSION = "ps-1";
+const VERSION = "ps-2";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => {

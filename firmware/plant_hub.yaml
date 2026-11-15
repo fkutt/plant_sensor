@@ -1,0 +1,506 @@
+# Plant sensor HUB (ESPHome) - any ESP32-C3 board on a USB charger, e.g. a spare SuperMini.
+#
+# - Probes send every reading over ESP-NOW (no router needed) the moment they take it.
+# - The hub stores them in its own flash area (448 KB = 28 672 readings, kept after a power cut).
+# - Phone page: "Connect" -> pick plant-hub-xxxxxx (Bluetooth is always on) -> all probes, all history.
+# - Settings for a probe are entered in the phone page and handed to the probe at its next wake.
+# - Optional: home WiFi + MQTT -> Home Assistant gets every probe (MQTT discovery).
+#
+# FIRST START: the hub opens WiFi "plant-hub-xxxxxx" (password: planthub). Leave it like that for
+# offline use (Bluetooth + ESP-NOW only), or connect a phone, open http://192.168.4.1 and choose your
+# home WiFi. MQTT and the web page login are set on the hub's web page or in the phone page.
+# BOOT button: hold 10 s = network reset (WiFi + MQTT erased, readings and probes kept).
+#
+# The probes look for the hub on all WiFi channels by themselves (first contact, or after 3 missed
+# answers - e.g. when the router changed its channel).
+
+substitutions:
+  fw_version: "0.1.1 alpha"
+  setup_password: "planthub"
+
+esphome:
+  name: plant-hub
+  friendly_name: "Baza czujników roślin"
+  name_add_mac_suffix: true
+  project:
+    name: "fkutt.plant_hub"
+    version: "${fw_version}"
+  includes:
+    - plant_net.h
+    - hub_core.h
+  on_boot:
+    - priority: 600
+      then:
+        - lambda: |-
+            hub::log_init();
+            hub::table_load();
+            hub::radio = id(espnow_c);
+    - priority: -100
+      then:
+        - lambda: |-
+            if (!id(web_user).state.empty() && !id(web_pass).state.empty()) {
+              hub::web_user_s = id(web_user).state;
+              hub::web_pass_s = id(web_pass).state;
+              web_server_base::global_web_server_base->set_auth_username(hub::web_user_s.c_str());
+              web_server_base::global_web_server_base->set_auth_password(hub::web_pass_s.c_str());
+            }
+            if (!id(mqtt_host).state.empty()) {
+              id(mqtt_client).set_broker_address(id(mqtt_host).state);
+              id(mqtt_client).set_broker_port((uint16_t) id(mqtt_port).state);
+              id(mqtt_client).set_username(id(mqtt_user).state);
+              id(mqtt_client).set_password(id(mqtt_pass).state);
+              id(mqtt_client).enable();
+            }
+        - ble_server.characteristic.set_value:
+            id: ch_status
+            value: !lambda 'return id(status_text);'
+        - script.execute: update_status
+
+esp32:
+  board: esp32-c3-devkitm-1
+  flash_size: 4MB
+  partitions: hub_partitions.csv
+  framework:
+    type: esp-idf
+
+preferences:
+  flash_write_interval: 60s
+
+logger:
+  level: INFO
+
+wifi:
+  id: wifi_comp
+  power_save_mode: none            # mains powered: always listening for the probes
+  ap:                              # setup / offline network (stays on while no home WiFi is set)
+    password: ${setup_password}
+    ap_timeout: 30s
+    channel: 1
+
+captive_portal:
+
+mdns:
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+espnow:
+  id: espnow_c
+  auto_add_peer: true
+  on_receive:
+    - lambda: 'hub::on_packet(info.src_addr, data, size, info.rx_ctrl ? info.rx_ctrl->rssi : 0);'
+  on_broadcast:
+    - lambda: 'hub::on_packet(info.src_addr, data, size, info.rx_ctrl ? info.rx_ctrl->rssi : 0);'
+
+mqtt:
+  id: mqtt_client
+  broker: mqtt.invalid             # replaced at boot by the settings from the web page / phone
+  enable_on_boot: false
+  discovery: false                 # the hub's own entities stay out of HA; probes are announced by hand
+  birth_message:
+  will_message:
+  on_connect:
+    - lambda: 'for (int i = 0; i < hub::MAXP; i++) { hub::mqtt_disc[i] = false; hub::mqtt_dirty[i] = hub::T.p[i].used; }'
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+  - platform: web_server
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+  include_internal: true
+  auth:
+    type: digest
+    username: !secret web_username
+    password: !secret web_password
+  sorting_groups:
+    - id: grp_values
+      name: "Baza"
+      sorting_weight: 10
+    - id: grp_wifi
+      name: "WiFi"
+      sorting_weight: 20
+    - id: grp_mqtt
+      name: "MQTT (Home Assistant)"
+      sorting_weight: 30
+    - id: grp_set
+      name: "Ustawienia"
+      sorting_weight: 40
+
+esp32_ble:
+  id: ble
+
+esp32_ble_server:
+  manufacturer: "DIY"
+  model: "Plant sensor hub"
+  services:
+    - uuid: 7c1e1001-6b3a-4b8e-9d6a-1f2e3d4c5b6a
+      advertise: true
+      characteristics:
+        - id: ch_status            # text: kind=hub;name=..;t=..;n=..;ser=..;np=..;ch=..;wc=..;mc=..
+          uuid: 7c1e1002-6b3a-4b8e-9d6a-1f2e3d4c5b6a
+          read: true
+          value: "-"
+        - id: ch_data              # answer to the last command (records chunk or probe text)
+          uuid: 7c1e1004-6b3a-4b8e-9d6a-1f2e3d4c5b6a
+          read: true
+        - id: ch_cmd
+          uuid: 7c1e1003-6b3a-4b8e-9d6a-1f2e3d4c5b6a
+          write: true
+          on_write:
+            then:
+              - lambda: |-
+                  // T<unix> clock | R<serial> records from serial | P<i> probe info |
+                  // S<US>i<US>li<US>re<US>st<US>dry<US>wet<US>label pending settings | C<US>i<US>CLEAR |
+                  // N<US>i cancel pending | X<US>i forget probe | CLEARLOG | WIFI<US>ssid<US>pass |
+                  // MQTT<US>host<US>port<US>user<US>pass ("<keep>") | WEB<US>user<US>pass | RESTART
+                  std::string c(x.begin(), x.end());
+                  if (c.empty()) return;
+                  std::vector<std::string> p;
+                  size_t s0 = 0;
+                  while (true) {
+                    size_t k = c.find('\x1f', s0);
+                    p.push_back(c.substr(s0, k == std::string::npos ? std::string::npos : k - s0));
+                    if (k == std::string::npos) break;
+                    s0 = k + 1;
+                  }
+                  const std::string &cmd = p[0];
+                  std::vector<uint8_t> out;
+                  auto text = [&](const std::string &s) { out.assign(s.begin(), s.end()); };
+                  if (cmd == "S") { hub::set_pending(p); text("ok"); }
+                  else if (cmd == "C" && p.size() >= 3) { if (p[2] == "CLEAR") hub::set_cmd(atoi(p[1].c_str()), pnet::CMD_CLEAR_LOG); text("ok"); }
+                  else if (cmd == "N" && p.size() >= 2) { hub::cancel_pending(atoi(p[1].c_str())); text("ok"); }
+                  else if (cmd == "X" && p.size() >= 2) { hub::forget(atoi(p[1].c_str())); text("ok"); }
+                  else if (cmd == "CLEARLOG") { hub::log_clear(); text("ok"); }
+                  else if (cmd == "WIFI" && p.size() >= 3 && !p[1].empty()) { id(wifi_comp).save_wifi_sta(p[1], p[2]); id(g_cmd) = 10; text("ok"); }
+                  else if (cmd == "MQTT" && p.size() >= 5) {
+                    { auto call = id(mqtt_host).make_call(); call.set_value(p[1]); call.perform(); }
+                    { auto call = id(mqtt_port).make_call(); call.set_value(atof(p[2].c_str())); call.perform(); }
+                    { auto call = id(mqtt_user).make_call(); call.set_value(p[3]); call.perform(); }
+                    if (p[4] != "<keep>") { auto call = id(mqtt_pass).make_call(); call.set_value(p[4]); call.perform(); }
+                    id(g_cmd) = 10; text("ok");
+                  } else if (cmd == "WEB" && p.size() >= 3 && !p[1].empty() && !p[2].empty()) {
+                    { auto call = id(web_user).make_call(); call.set_value(p[1]); call.perform(); }
+                    { auto call = id(web_pass).make_call(); call.set_value(p[2]); call.perform(); }
+                    id(g_cmd) = 10; text("ok");
+                  } else if (cmd == "RESTART") { id(g_cmd) = 10; text("ok"); }
+                  else if (cmd[0] == 'T') {
+                    struct timeval tv; tv.tv_sec = strtoul(cmd.c_str() + 1, nullptr, 10); tv.tv_usec = 0;
+                    if (tv.tv_sec > pnet::TIME_VALID) settimeofday(&tv, nullptr);
+                    text("ok");
+                  } else if (cmd[0] == 'R') { out = hub::chunk((uint32_t) strtoul(cmd.c_str() + 1, nullptr, 10)); }
+                  else if (cmd[0] == 'P') { text(hub::probe_text(atoi(cmd.c_str() + 1))); }
+                  id(g_out) = out;
+                  hub::table_save();
+              - ble_server.characteristic.set_value:
+                  id: ch_data
+                  value: !lambda 'return id(g_out);'
+              - script.execute: update_status
+              - if:
+                  condition:
+                    lambda: 'return id(g_cmd) == 10;'
+                  then:
+                    - lambda: 'id(g_cmd) = 0; global_preferences->sync();'
+                    - delay: 1500ms
+                    - lambda: 'App.safe_reboot();'
+
+globals:
+  - id: g_out
+    type: std::vector<uint8_t>
+  - id: g_cmd
+    type: int
+    initial_value: '0'
+  - id: status_text
+    type: std::vector<uint8_t>
+
+output:
+  - platform: gpio
+    id: status_led
+    pin:
+      number: GPIO8
+      inverted: true
+      ignore_strapping_warning: true
+
+binary_sensor:
+  - platform: gpio
+    id: boot_button
+    internal: true
+    pin:
+      number: GPIO9
+      inverted: true
+      ignore_strapping_warning: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      then:
+        - delay: 10s
+        - if:
+            condition:
+              binary_sensor.is_on: boot_button
+            then:
+              - script.execute: network_reset
+
+number:
+  - platform: template
+    id: mqtt_port
+    name: "Port MQTT"
+    internal: true
+    min_value: 1
+    max_value: 65535
+    step: 1
+    initial_value: 1883
+    optimistic: true
+    restore_value: true
+    mode: box
+    web_server:
+      sorting_group_id: grp_mqtt
+
+text:
+  - platform: template
+    id: wifi_ssid_in
+    name: "Nowa sieć WiFi (SSID)"
+    internal: true
+    optimistic: true
+    mode: text
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_wifi
+  - platform: template
+    id: wifi_pass_in
+    name: "Hasło nowej sieci WiFi"
+    internal: true
+    optimistic: true
+    mode: password
+    max_length: 64
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_wifi
+  - platform: template
+    id: mqtt_host
+    name: "Broker MQTT (IP lub nazwa)"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: text
+    max_length: 64
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_mqtt
+  - platform: template
+    id: mqtt_user
+    name: "Użytkownik MQTT"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: text
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_mqtt
+  - platform: template
+    id: mqtt_pass
+    name: "Hasło MQTT"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: password
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_mqtt
+  - platform: template
+    id: web_user
+    name: "Użytkownik strony www"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: text
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_set
+  - platform: template
+    id: web_pass
+    name: "Hasło strony www"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: password
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_set
+
+button:
+  - platform: template
+    name: "Zapisz WiFi (restart)"
+    internal: true
+    on_press:
+      - lambda: |-
+          if (id(wifi_ssid_in).state.empty()) return;
+          id(wifi_comp).save_wifi_sta(id(wifi_ssid_in).state, id(wifi_pass_in).state);
+          global_preferences->sync();
+      - delay: 500ms
+      - lambda: 'App.safe_reboot();'
+    web_server:
+      sorting_group_id: grp_wifi
+  - platform: template
+    name: "Zapisz ustawienia MQTT (restart)"
+    internal: true
+    on_press:
+      - lambda: 'global_preferences->sync();'
+      - delay: 300ms
+      - lambda: 'App.safe_reboot();'
+    web_server:
+      sorting_group_id: grp_mqtt
+  - platform: template
+    name: "Zapisz login strony (restart)"
+    internal: true
+    on_press:
+      - lambda: 'global_preferences->sync();'
+      - delay: 300ms
+      - lambda: 'App.safe_reboot();'
+    web_server:
+      sorting_group_id: grp_set
+  - platform: template
+    name: "Reset sieci (WiFi + MQTT)"
+    internal: true
+    on_press:
+      - script.execute: network_reset
+    web_server:
+      sorting_group_id: grp_set
+
+sensor:
+  - platform: template
+    id: s_probes
+    name: "Liczba sond"
+    icon: mdi:sprout
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: 'return hub::probe_count();'
+    web_server:
+      sorting_group_id: grp_values
+  - platform: template
+    id: s_records
+    name: "Pomiary w bazie"
+    icon: mdi:database
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: 'return hub::count;'
+    web_server:
+      sorting_group_id: grp_values
+  - platform: template
+    id: s_rx
+    name: "Odebrane pakiety od startu"
+    icon: mdi:access-point-network
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: 'return hub::rx_count;'
+    web_server:
+      sorting_group_id: grp_values
+  - platform: template
+    id: s_channel
+    name: "Kanał radiowy"
+    icon: mdi:wifi
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: 'return hub::channel();'
+    web_server:
+      sorting_group_id: grp_values
+
+text_sensor:
+  - platform: template
+    id: t_last
+    name: "Ostatni odbiór"
+    icon: mdi:clock-outline
+    update_interval: 10s
+    lambda: |-
+      if (hub::last_rx_probe < 0) return std::string("-");
+      return hub::probe_name(hub::T.p[hub::last_rx_probe].mac) + " (" +
+             std::to_string(hub::T.p[hub::last_rx_probe].rssi) + " dBm)";
+    web_server:
+      sorting_group_id: grp_values
+  - platform: template
+    id: t_fw
+    name: "Wersja oprogramowania"
+    icon: mdi:chip
+    update_interval: never
+    lambda: 'return std::string("${fw_version}");'
+    web_server:
+      sorting_group_id: grp_values
+
+interval:
+  - interval: 2s
+    then:
+      - lambda: |-
+          // blink on every reception, save the probe table, feed Home Assistant
+          if (hub::led_pulse) { hub::led_pulse = false; id(status_led).turn_on(); }
+          else id(status_led).turn_off();
+          static uint32_t last_save = 0;
+          if (hub::dirty && millis() - last_save > 30000) { hub::table_save(); last_save = millis(); }
+          if (id(mqtt_client).is_connected()) {
+            std::string hn = App.get_name();
+            for (int i = 0; i < hub::MAXP; i++) {
+              if (!hub::T.p[i].used) continue;
+              std::string n = hub::probe_name(hub::T.p[i].mac);
+              if (!hub::mqtt_disc[i]) {
+                for (const char *w : {"moisture", "battery", "rssi"})
+                  id(mqtt_client).publish(std::string("homeassistant/sensor/") + n + "_" + w + "/config",
+                                          hub::json_discovery(i, w, hn), 0, true);
+                hub::mqtt_disc[i] = true;
+              }
+              if (hub::mqtt_dirty[i]) {
+                id(mqtt_client).publish(hn + "/" + n + "/state", hub::json_state(i), 0, true);
+                hub::mqtt_dirty[i] = false;
+              }
+            }
+          }
+      - script.execute: update_status
+
+script:
+  - id: update_status
+    then:
+      - lambda: |-
+          char b[400];
+          snprintf(b, sizeof(b),
+                   "kind=hub;t=%u;n=%u;cap=%u;ser=%u;old=%u;np=%d;ch=%u;wc=%d;mc=%d;mh=%s;mp=%d;mu=%s;wu=%s;rx=%u;fw=${fw_version};name=%s",
+                   (unsigned) pnet::now_s(), (unsigned) hub::count, (unsigned) hub::cap, (unsigned) hub::last_serial,
+                   (unsigned) hub::oldest_serial(), hub::probe_count(), hub::channel(),
+                   id(wifi_comp).is_connected() ? 1 : 0, id(mqtt_client).is_connected() ? 1 : 0,
+                   id(mqtt_host).state.c_str(), (int) id(mqtt_port).state, id(mqtt_user).state.c_str(),
+                   id(web_user).state.c_str(), (unsigned) hub::rx_count, App.get_name().c_str());
+          std::string s(b);
+          id(status_text).assign(s.begin(), s.end());
+      - ble_server.characteristic.set_value:
+          id: ch_status
+          value: !lambda 'return id(status_text);'
+
+  - id: network_reset
+    then:
+      - logger.log: "NETWORK RESET: WiFi + MQTT erased, probes and readings kept"
+      - repeat:
+          count: 15
+          then:
+            - output.turn_on: status_led
+            - delay: 60ms
+            - output.turn_off: status_led
+            - delay: 60ms
+      - lambda: 'id(wifi_comp).save_wifi_sta("", "");'
+      - text.set:
+          id: mqtt_host
+          value: ""
+      - text.set:
+          id: mqtt_user
+          value: ""
+      - text.set:
+          id: mqtt_pass
+          value: ""
+      - lambda: 'hub::dirty = true; hub::table_save(); global_preferences->sync();'
+      - delay: 500ms
+      - lambda: 'App.safe_reboot();'

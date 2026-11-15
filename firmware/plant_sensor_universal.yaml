@@ -1,0 +1,7 @@
+# Plant sensor - universal firmware, English
+# Flash this file. Keep all files of this folder together.
+
+packages:
+  base: !include plant_sensor_base.yaml
+  # PCB v2: board_v2.yaml | PCB v3: board_v3_supermini.yaml or board_v3_zero.yaml
+  board: !include board_v2.yaml

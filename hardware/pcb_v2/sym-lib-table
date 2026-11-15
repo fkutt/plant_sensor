@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "plant_sensor")(type "KiCad")(uri "${KIPRJMOD}/plant_sensor.kicad_sym")(options "")(descr "Project symbols: ESP32-C3-MINI-1, BQ25170DSG, probe electrodes"))
+)

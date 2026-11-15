@@ -1,0 +1,12 @@
+# Pin map: v2 board (PCB "PLANT SENSOR v2") with an ESP32-C3 SuperMini.
+# Choose the board in the top-level file (packages: board: !include ...).
+substitutions:
+  pin_moist: GPIO0
+  pin_vbat: GPIO1
+  pin_probe: GPIO4
+  pin_div: GPIO5
+  pin_led: GPIO8
+  pin_sens: GPIO3
+  pin_sda: GPIO7
+  pin_scl: GPIO10
+  board_name: "v2 SuperMini"

@@ -1,0 +1,21 @@
+Item,Designator,Qty,Value,Package,Manufacturer,Manufacturer Part Number,Description,Type,Place,Link
+1,"C1, C2, C14",3,1u,C_0603_1608Metric,Any,,Ceramic capacitor 1u 16V+ X5R/X7R 0603,SMD,Yes,
+2,"C3, C15",2,10u,C_0805_2012Metric,Any,,Ceramic capacitor 10u 10V X5R/X7R 0805,SMD,Yes,
+3,"C11, C12, C13, C16, C17",5,100n,C_0603_1608Metric,Any,,Ceramic capacitor 100n 16V+ X5R/X7R 0603,SMD,Yes,
+4,D1,1,BAT54WS-TP,D_SOD-323,MCC,BAT54WS-TP,Schottky diode 30V SOD-323,SMD,Yes,https://www.lcsc.com/product-detail/schottky-diodes_mcc-micro-commercial-components-bat54ws-tp_C668868.html
+5,LED1,1,red,LED_0603_1608Metric,Any,,LED red 0603,SMD,Yes,
+6,Q1,1,AO3401A,SOT-23,Alpha & Omega,AO3401A,"Sensor power switch, P-MOSFET SOT-23 (off unless GPIO3 low)",SMD,Yes,https://www.lcsc.com/product-detail/C15127.html
+7,"R3, R6, R15",3,1k,R_0603_1608Metric,Any,,Resistor 1k 1% 0603,SMD,Yes,
+8,"R4, R16, R17, R21",4,100k,R_0603_1608Metric,Any,,Resistor 100k 1% 0603,SMD,Yes,
+9,"R5, R13",2,10k,R_0603_1608Metric,Any,,Resistor 10k 1% 0603,SMD,Yes,
+10,R14,1,1M,R_0603_1608Metric,Any,,Resistor 1M 1% 0603,SMD,Yes,
+11,"R19, R20",2,4.7k,R_0603_1608Metric,Any,,Resistor 4.7k 1% 0603,SMD,Yes,
+12,U1,1,BQ25170DSGR,WSON-8-1EP_2x2mm_P0.5mm_EP0.9x1.6mm,Texas Instruments,BQ25170DSGR,"LiFePO4 linear charger 800mA, WSON-8 2x2",SMD,Yes,https://www.lcsc.com/product-detail/battery-management_texas-instruments-bq25170dsgr_C5208201.html
+13,BT1,1,LiFePO4 14500,BatteryHolder_Keystone_2460_1xAA,Keystone,2460,"1xAA/14500 holder, PC pins (THT) - DO NOT PLACE (hand solder, back side)",THT,No (hand),https://www.digikey.com/en/products/detail/keystone-electronics/2460/280629
+14,J2,1,I2C JST-PH,JST_PH_S4B-PH-K_1x04_P2.00mm_Horizontal,JST,S4B-PH-K-S,"OPTIONAL JST PH 2.0 mm 4-pin side entry S4B-PH-K-S, back side (hand solder)",THT,No (hand),https://www.lcsc.com/search?q=S4B-PH-K-S
+15,U2,1,ESP32-C3 SuperMini,ESP32-C3_SuperMini_Socket,Nologo / generic,ESP32-C3 SuperMini,"ESP32-C3 board, USB-C, 22.5x18 mm - plug-in on 2x 1x8 sockets; remove power LED + 3.3V regulator",THT,No (hand),https://jlcpcb.com/partdetail/JLCPCBAssembly-ESP32C3SuperMini/C9900147397
+16,U3,1,SHT40-AD1B,Sensirion_DFN-4_1.5x1.5mm_P0.8mm_SHT4x_NoCentralPad,Sensirion,SHT40-AD1B,"OPTIONAL temperature + humidity, DFN-4 1.5x1.5 (hot air)",SMD,No (hand),https://www.lcsc.com/search?q=SHT40-AD1B
+17,U4,1,LTR-303ALS-01,Lite-On_LTR-303ALS-01,Lite-On,LTR-303ALS-01,"OPTIONAL ambient light sensor, 2x2 ChipLED-6 (hot air)",SMD,No (hand),https://www.lcsc.com/search?q=LTR-303ALS-01
+18,U5,1,SCD41-D-R2,Sensirion_SCD4x-1EP_10.1x10.1mm_P1.25mm_EP4.8x4.8mm,Sensirion,SCD41-D-R2,"OPTIONAL CO2 sensor, 10.1x10.1 LGA (hot air)",SMD,No (hand),https://www.lcsc.com/search?q=SCD41
+19,U6,1,RV-8523-C3,RTC_SMD_MicroCrystal_C3_2.5x3.7mm,Micro Crystal,RV-8523-C3,"OPTIONAL real-time clock, crystal built in, C3 2.5x3.7 (hot air)",SMD,No (hand),https://www.lcsc.com/search?q=RV-8523-C3
+20,(U2 socket),2,1x8 female,2.54 mm,Any,,Female pin socket 1x8 2.54 mm (or round-pin machined for a lower stack) - hand solder on the back,THT,No (hand),

@@ -1,0 +1,66 @@
+# Optional sensors package (SHT40 air temperature + humidity, LTR-303ALS light, SCD41 CO2).
+# Included by plant_sensor_universal_env.yaml / plant_sensor_universal_env_pl.yaml.
+# Delete the block of any sensor you did not fit.
+
+substitutions:
+  t_air_temp: "Air temperature"
+  t_air_hum: "Air humidity"
+  t_light: "Light"
+  t_co2: "CO2"
+
+switch:
+  - platform: gpio
+    id: sens_pwr
+    pin:
+      number: ${pin_sens}
+      inverted: true               # "on" drives the pin low -> Q1 conducts
+    internal: true
+    restore_mode: ALWAYS_ON        # sensors powered from boot, before the I2C sensors start
+
+i2c:
+  sda: ${pin_sda}
+  scl: ${pin_scl}
+  frequency: 100kHz
+  scan: false
+
+sensor:
+  - platform: sht4x
+    id: sht
+    temperature:
+      name: "${t_air_temp}"
+      web_server:
+        sorting_group_id: grp_values
+    humidity:
+      name: "${t_air_hum}"
+      web_server:
+        sorting_group_id: grp_values
+    update_interval: never
+
+  - platform: ltr_als_ps
+    id: lux_sensor
+    address: 0x29
+    type: ALS
+    gain: 1X                       # 1X = up to ~64k lux (window light)
+    ambient_light:
+      name: "${t_light}"
+      web_server:
+        sorting_group_id: grp_values
+    update_interval: never
+
+  - platform: scd4x
+    id: co2_sensor
+    measurement_mode: single_shot  # one 5 s measurement per wake
+    co2:
+      name: "${t_co2}"
+      web_server:
+        sorting_group_id: grp_values
+    update_interval: never
+
+script:
+  - id: !extend read_extra
+    then:
+      - delay: 50ms                # sensors power-up time
+      - component.update: sht
+      - component.update: lux_sensor
+      - component.update: co2_sensor
+      - delay: 5500ms              # SCD41 single shot takes 5 s

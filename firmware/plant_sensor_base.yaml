@@ -1,0 +1,1520 @@
+# Plant sensor - UNIVERSAL firmware, shared base (ESPHome).
+# Flash one of: plant_sensor_universal.yaml (EN), plant_sensor_universal_pl.yaml (PL),
+# plant_sensor_universal_env.yaml / plant_sensor_universal_env_pl.yaml (with SHT40/LTR-303/SCD41).
+#
+# FIRST START (or after a network reset)
+#   The probe opens its own WiFi "plant-sensor-xxxxxx" (password: plantsensor). Connect a phone,
+#   the setup page opens (or go to http://192.168.4.1), choose your WiFi and enter its password.
+#   The probe restarts on your WiFi in SERVICE MODE: open http://plant-sensor-xxxxxx.local/
+#   (or its IP from your router) and enter the MQTT broker under "MQTT", then "Apply MQTT settings".
+#   During this first setup only WiFi is on; Bluetooth starts once WiFi is configured (or after
+#   leaving service mode). Web page login: defaults from secrets.yaml, changeable under Settings
+#   or from the phone page.
+#   Service mode ends after 30 min or with the BOOT button; from then on the probe runs normally.
+#
+# NORMAL MODE
+#   Every hour (setting "Log interval"): wakes ~0.5 s, measures, stores the reading in its own
+#   flash log, sleeps. Every 6th wake (setting "Report every") it also connects to WiFi and sends
+#   the values to MQTT / Home Assistant.
+#   RST button: measures, blinks the moisture code (slow = dry, fast = wet; long glow first =
+#   battery low) and sends to the hub. Hub answered -> one 1 s glow after the code, no WiFi / Bluetooth,
+#   sleeps after ~10 s (the phone talks to the hub). No hub -> sends to MQTT and keeps Bluetooth
+#   on for 2 minutes for the phone page (history download). Then sleeps.
+#
+# WITH A HUB (plant_hub.yaml, switch "Send to hub"): the probe never uses WiFi or Bluetooth while
+#   the hub answers - the hub stores the readings, forwards them to MQTT and talks to the phone.
+#   Service mode (BOOT 2 s) still turns WiFi + Bluetooth on for repairs.
+#
+# BOOT BUTTON (while awake; never hold it while pressing RST - that is USB download mode)
+#   hold 2 s  -> LED goes off and blinks once; release now = service mode on/off
+#   hold 5 s  -> LED blinks twice; release now = POWER OFF (no wakes at all, a few uA; press RST
+#                to start again - it starts in service mode)
+#   hold 10 s -> LED blinks fast = NETWORK RESET: WiFi and MQTT settings erased, back to first
+#                start. Calibration, settings and the measurement log are kept.
+#
+# SERVICE MODE: no sleep, WiFi + Bluetooth on, a reading every 10 s with the blink code, web page
+#   at http://<probe>/ (values, calibration, settings, firmware update), OTA updates.
+#
+# Hardware: the pins come from the board file chosen in the top-level file (board_*.yaml):
+#   moisture detector (ADC), battery / 2 (ADC), probe drive PWM, divider enable (low = measure),
+#   status LED (active low), BOOT button (GPIO9), sensor power (low = on), I2C SDA / SCL.
+#
+# Needs secrets.yaml with: ota_password, web_username, web_password  (no WiFi/MQTT secrets).
+# First flash over USB (it changes the flash layout); later updates over WiFi / web page.
+
+substitutions:
+  fw_version: "0.9.10 alpha"           # shown on the web page, in HA (device info), MQTT report and phone page
+  fw_short: "0.9.10a"                  # max 8 characters, sent to the hub
+  # pins (defaults = v2 board with the SuperMini; overridden by board_*.yaml)
+  pin_moist: GPIO0
+  pin_vbat: GPIO1
+  pin_probe: GPIO4
+  pin_div: GPIO5
+  pin_led: GPIO8
+  pin_sens: GPIO3
+  pin_sda: GPIO7
+  pin_scl: GPIO10
+  board_name: "v2 SuperMini"
+  t_grp_values: "Readings"
+  t_grp_cal: "Calibration"
+  t_grp_set: "Settings"
+  t_grp_wifi: "WiFi"
+  t_grp_mqtt: "MQTT (Home Assistant)"
+  t_grp_dbg: "Diagnostics"
+  t_service: "Service mode"
+  t_cal_dry: "Calibration dry"
+  t_cal_wet: "Calibration wet"
+  t_log_int: "Log interval"
+  t_report: "Report every (logs)"
+  t_svc_to: "Service mode timeout"
+  t_mqtt_port: "MQTT port"
+  t_mqtt_host: "MQTT broker (IP or host)"
+  t_mqtt_user: "MQTT user"
+  t_mqtt_pass: "MQTT password"
+  t_mqtt_apply: "Apply MQTT settings (restart)"
+  t_wifi_ssid: "New WiFi network (SSID)"
+  t_wifi_pass: "New WiFi password"
+  t_wifi_apply: "Apply WiFi settings (restart)"
+  t_wifi_cur: "Connected WiFi"
+  t_set_dry: "Set dry (current reading)"
+  t_set_wet: "Set wet (current reading)"
+  t_clear_log: "Clear measurement log"
+  t_net_reset: "Network reset (setup WiFi again)"
+  t_moist: "Soil moisture"
+  t_raw: "Soil moisture raw"
+  t_batt: "Battery voltage"
+  t_logcount: "Log records"
+  t_ip: "IP address"
+  t_friendly: "Plant sensor"
+  t_fw: "Firmware version"
+  t_hub: "Send to hub (ESP-NOW)"
+  t_hub_state: "Hub link"
+  t_boots: "Boot history"
+  t_freq: "Probe drive frequency"
+  t_duty: "Probe drive duty"
+  t_settle: "Probe settle time"
+  t_spread: "Soil raw noise"
+  t_report_fail: "Unconfirmed reports"
+  t_last_report: "Last report"
+  t_power_off: "Power off (RST to start)"
+  t_web_user: "Web page user"
+  t_web_pass: "Web page password"
+  t_web_apply: "Apply web login (restart)"
+  wifi_power: 13dB                 # SuperMini: try 8.5dB..17dB if a board has WiFi trouble
+  setup_password: plantsensor      # password of the probe's own setup WiFi
+
+esphome:
+  name: plant-sensor
+  friendly_name: ${t_friendly}
+  name_add_mac_suffix: true        # every probe gets its own name: plant-sensor-a1b2c3
+  project:
+    name: "fkutt.plant_sensor"
+    version: "${fw_version}"
+  includes:
+    - plant_log.h
+    - plant_net.h
+  on_boot:
+    - priority: 600
+      then:
+        - lambda: |-
+            plog::release_straps();
+            plog::init();
+            plog::record_boot();
+            ESP_LOGI("boot", "boot history (newest first): %s", plog::boot_history().c_str());
+            id(g_timer_wake) = (esp_reset_reason() == ESP_RST_DEEPSLEEP);
+            if (id(g_timer_wake)) plog::rtc_wakes++;
+    - priority: -100               # all components (ADC!) are set up now; the radios are still off
+      then:
+        - lambda: |-
+            id(do_measure).execute();
+            id(fw_ver).publish_state("${fw_version} (${board_name})");
+            id(boot_hist).publish_state(plog::boot_history());
+        - script.execute: wake_flow
+
+esp32:
+  board: esp32-c3-devkitm-1
+  flash_size: 4MB
+  partitions: partitions_plant.csv
+  framework:
+    type: esp-idf                  # smaller than arduino: room for WiFi + Bluetooth + web page
+
+preferences:
+  flash_write_interval: 10s
+
+logger:
+  level: INFO
+
+wifi:
+  id: wifi_comp
+  enable_on_boot: false            # WiFi only when needed (reports, RST wake, service mode)
+  output_power: ${wifi_power}
+  power_save_mode: light
+  on_connect:
+    - lambda: |-
+        if (!id(g_wifi_ok)) { id(g_wifi_ok) = true; global_preferences->sync(); }
+  ap:                              # setup WiFi when no network is saved (or it can't connect)
+    password: ${setup_password}
+    ap_timeout: 30s
+
+captive_portal:
+
+mdns:
+
+espnow:                            # radio link to the hub (no router needed); on only for ~0.2 s per wake
+  id: espnow_c
+  enable_on_boot: false
+  auto_add_peer: false
+  on_receive:
+    - lambda: 'pnet::on_packet(info.src_addr, data, size, info.rx_ctrl ? info.rx_ctrl->rssi : 0);'
+  on_unknown_peer:
+    - lambda: 'pnet::on_packet(info.src_addr, data, size, info.rx_ctrl ? info.rx_ctrl->rssi : 0);'
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+mqtt:
+  id: mqtt_client
+  broker: mqtt.invalid             # replaced at runtime by the settings from the web page
+  enable_on_boot: false
+  discovery_unique_id_generator: mac
+  discovery_object_id_generator: device_name
+  # a sleeping probe must not be reported "offline": Home Assistant would mark every value
+  # unavailable between the short wakes. Without these the entities keep the last reading.
+  birth_message:
+  will_message:
+  shutdown_message:
+  on_connect:
+    - lambda: |-
+        static bool subscribed = false;
+        if (subscribed) return;
+        subscribed = true;
+        id(mqtt_client).subscribe(std::string(App.get_name().c_str()) + "/report",
+          [](const std::string &topic, const std::string &payload) {
+            size_t k = payload.find("\"seq\":");
+            if (k == std::string::npos) return;
+            uint32_t seq = strtoul(payload.c_str() + k + 6, nullptr, 10);
+            if (seq == id(g_seq)) id(g_ack) = true;
+          }, 1);
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+    on_end:                        # after an update: restart in service mode
+      - lambda: |-
+          id(g_start_service) = true;
+          global_preferences->sync();
+  - platform: web_server
+    on_end:                        # after an update: restart in service mode
+      - lambda: |-
+          id(g_start_service) = true;
+          global_preferences->sync();
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+  include_internal: true           # show the MQTT settings on the page (they stay out of HA)
+  auth:
+    type: digest
+    username: !secret web_username
+    password: !secret web_password
+  sorting_groups:
+    - id: grp_values
+      name: "${t_grp_values}"
+      sorting_weight: 10
+    - id: grp_cal
+      name: "${t_grp_cal}"
+      sorting_weight: 20
+    - id: grp_set
+      name: "${t_grp_set}"
+      sorting_weight: 30
+    - id: grp_wifi
+      name: "${t_grp_wifi}"
+      sorting_weight: 35
+    - id: grp_mqtt
+      name: "${t_grp_mqtt}"
+      sorting_weight: 40
+    - id: grp_dbg
+      name: "${t_grp_dbg}"
+      sorting_weight: 90
+
+esp32_ble:
+  id: ble
+  enable_on_boot: false            # Bluetooth only after RST (2 min) and in service mode
+
+esp32_ble_server:
+  manufacturer: "DIY"
+  model: "Plant sensor"
+  on_connect:
+    - lambda: 'id(g_ble_clients) += 1;'
+  on_disconnect:
+    - lambda: 'if (id(g_ble_clients) > 0) id(g_ble_clients) -= 1;'
+  services:
+    - uuid: 7c1e0001-6b3a-4b8e-9d6a-1f2e3d4c5b6a
+      advertise: true
+      characteristics:
+        - id: ch_status            # text: m=..;raw=..;vb=..;dry=..;wet=..;n=..;cap=..;t=..;svc=..
+          uuid: 7c1e0002-6b3a-4b8e-9d6a-1f2e3d4c5b6a
+          read: true
+          value: "-"
+        - id: ch_data              # records chunk prepared by "R<index>"
+          uuid: 7c1e0004-6b3a-4b8e-9d6a-1f2e3d4c5b6a
+          read: true
+        - id: ch_cmd               # commands from the phone (text)
+          uuid: 7c1e0003-6b3a-4b8e-9d6a-1f2e3d4c5b6a
+          write: true
+          on_write:
+            then:
+              - lambda: |-
+                  // commands: single letters (T<unix>, R<index>, D, W, M) or NAME<US>field<US>field...
+                  // (<US> = 0x1F). Settings: CFG<US>log_min<US>report_every<US>service_min,
+                  // WIFI<US>ssid<US>password, MQTT<US>host<US>port<US>user<US>password ("<keep>" = unchanged),
+                  // WEB<US>user<US>password (web page login)
+                  std::string c(x.begin(), x.end());
+                  if (c.empty()) return;
+                  std::vector<std::string> p;
+                  size_t s0 = 0;
+                  while (true) {
+                    size_t k = c.find('\x1f', s0);
+                    p.push_back(c.substr(s0, k == std::string::npos ? std::string::npos : k - s0));
+                    if (k == std::string::npos) break;
+                    s0 = k + 1;
+                  }
+                  const std::string &cmd = p[0];
+                  if (cmd == "WIFI" && p.size() >= 3 && !p[1].empty()) {
+                    id(wifi_comp).save_wifi_sta(p[1], p[2]);
+                    id(g_cmd) = 10;                       // restart to use it
+                  } else if (cmd == "MQTT" && p.size() >= 5) {
+                    { auto call = id(mqtt_host).make_call(); call.set_value(p[1]); call.perform(); }
+                    { auto call = id(mqtt_port).make_call(); call.set_value(atof(p[2].c_str())); call.perform(); }
+                    { auto call = id(mqtt_user).make_call(); call.set_value(p[3]); call.perform(); }
+                    if (p[4] != "<keep>") { auto call = id(mqtt_pass).make_call(); call.set_value(p[4]); call.perform(); }
+                    id(g_cmd) = 10;
+                  } else if (cmd == "WEB" && p.size() >= 3 && !p[1].empty() && !p[2].empty()) {
+                    { auto call = id(web_user).make_call(); call.set_value(p[1]); call.perform(); }
+                    { auto call = id(web_pass).make_call(); call.set_value(p[2]); call.perform(); }
+                    id(g_cmd) = 10;
+                  } else if (cmd == "CFG" && p.size() >= 4) {
+                    { auto call = id(log_interval).make_call(); call.set_value(atof(p[1].c_str())); call.perform(); }
+                    { auto call = id(report_every).make_call(); call.set_value(atof(p[2].c_str())); call.perform(); }
+                    { auto call = id(service_timeout).make_call(); call.set_value(atof(p[3].c_str())); call.perform(); }
+                  } else if (cmd == "OFF") {
+                    id(g_cmd) = 11;                       // power off (after the reply)
+                  } else if (cmd == "CLEARLOG") {
+                    plog::clear();
+                  } else if (cmd[0] == 'T') {            // T<unix seconds>: set the clock
+                    pnet::set_clock((uint32_t) strtoul(cmd.c_str() + 1, nullptr, 10));
+                  } else if (cmd[0] == 'R') {            // R<index>: prepare records from index
+                    id(g_chunk) = plog::chunk((uint32_t) strtoul(cmd.c_str() + 1, nullptr, 10));
+                  } else if (cmd == "D") {               // current reading = dry
+                    id(g_cmd) = 1;
+                  } else if (cmd == "W") {               // current reading = wet
+                    id(g_cmd) = 2;
+                  } else if (cmd == "M") {               // measure now
+                    id(g_cmd) = 3;
+                  }
+              - ble_server.characteristic.set_value:
+                  id: ch_data
+                  value: !lambda 'return id(g_chunk);'
+              - script.execute: ble_cmd
+
+globals:
+  - id: g_moist
+    type: float
+    initial_value: '0'
+  - id: g_raw
+    type: float
+    initial_value: '0'
+  - id: g_vbat
+    type: float
+    initial_value: '0'
+  - id: g_spread
+    type: float
+    initial_value: '0'
+  - id: g_service
+    type: bool
+    initial_value: 'false'
+  - id: g_service_t0
+    type: uint32_t
+    initial_value: '0'
+  - id: g_setup_done               # false until service mode has been left once
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  - id: g_seq                      # report sequence number
+    type: uint32_t
+    restore_value: true
+    initial_value: '0'
+  - id: g_ack                      # broker sent our report back = stored
+    type: bool
+    initial_value: 'false'
+  - id: g_report_fail              # reports the broker never confirmed
+    type: uint32_t
+    restore_value: true
+    initial_value: '0'
+  - id: g_wifi_ok                  # has connected to a saved WiFi at least once (reports allowed)
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  - id: g_start_service            # set by "power off": next RST starts in service mode
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  - id: g_timer_wake
+    type: bool
+    initial_value: 'false'
+  - id: g_logged                   # this wake's reading already stored
+    type: bool
+    initial_value: 'false'
+  - id: g_btn_stage                # 0 idle, 1 = held 2 s (release toggles service), 2 = reset
+    type: int
+    initial_value: '0'
+  - id: g_ble_clients
+    type: int
+    initial_value: '0'
+  - id: g_cmd
+    type: int
+    initial_value: '0'
+  - id: g_chunk
+    type: std::vector<uint8_t>
+  - id: g_hub_mac                  # paired hub (0 = none yet)
+    type: uint64_t
+    restore_value: true
+    initial_value: '0'
+  - id: g_hub_ch
+    type: uint8_t
+    restore_value: true
+    initial_value: '1'
+  - id: g_hub_fail                 # wakes in a row without an answer from the hub
+    type: uint8_t
+    restore_value: true
+    initial_value: '0'
+  - id: g_cfg_ver                  # version of the settings last received from the hub
+    type: uint8_t
+    restore_value: true
+    initial_value: '0'
+  - id: g_unsent                   # readings not yet confirmed by the hub
+    type: uint32_t
+    restore_value: true
+    initial_value: '0'
+  - id: g_hub_rssi
+    type: int
+    initial_value: '0'
+  - id: g_hub_ok                   # the hub answered at this wake: no WiFi / Bluetooth needed
+    type: bool
+    initial_value: 'false'
+  - id: t0
+    type: uint32_t
+    initial_value: '0'
+
+deep_sleep:
+  id: sleeper
+  run_duration: 200s               # safety net; normal wakes end much earlier
+  sleep_duration: 60min
+
+output:
+  - platform: ledc
+    id: probe_drv
+    pin:
+      number: ${pin_probe}
+    frequency: 1000000Hz
+  - platform: gpio
+    id: status_led
+    pin:
+      number: ${pin_led}
+      inverted: true
+
+switch:
+  - platform: template
+    id: hub_enable
+    name: "${t_hub}"
+    icon: mdi:access-point-network
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_set
+  - platform: gpio
+    id: div_en
+    internal: true
+    pin:
+      number: ${pin_div}
+      inverted: true
+    restore_mode: ALWAYS_OFF
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: service_switch
+    name: "${t_service}"
+    icon: mdi:wrench
+    restore_mode: DISABLED
+    lambda: 'return id(g_service);'
+    turn_on_action:
+      - if:
+          condition:
+            lambda: 'return !id(g_service);'
+          then:
+            - script.execute: service_on
+    turn_off_action:
+      - if:
+          condition:
+            lambda: 'return id(g_service);'
+          then:
+            - script.execute: service_off
+    web_server:
+      sorting_group_id: grp_set
+      sorting_weight: 1
+
+binary_sensor:
+  - platform: gpio
+    id: boot_button
+    internal: true
+    pin:
+      number: GPIO9
+      inverted: true
+      ignore_strapping_warning: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      - script.stop: show_code
+      - lambda: 'id(g_btn_stage) = 0;'
+      - output.turn_on: status_led
+      - script.execute: btn_hold
+    on_release:
+      - script.stop: btn_hold
+      - output.turn_off: status_led
+      - if:
+          condition:
+            lambda: 'return id(g_btn_stage) == 1;'
+          then:
+            - lambda: 'id(g_btn_stage) = 0;'
+            - if:
+                condition:
+                  lambda: 'return id(g_service);'
+                then:
+                  - script.execute: service_off
+                else:
+                  - script.execute: service_on
+      - if:
+          condition:
+            lambda: 'return id(g_btn_stage) == 3;'
+          then:
+            - lambda: 'id(g_btn_stage) = 0;'
+            - script.execute: power_off
+    web_server:
+      sorting_group_id: grp_dbg
+
+number:
+  - platform: template
+    id: cal_dry
+    name: "${t_cal_dry}"
+    icon: mdi:water-off
+    unit_of_measurement: "V"
+    min_value: 0
+    max_value: 3.3
+    step: 0.001
+    initial_value: 2.30
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_cal
+  - platform: template
+    id: cal_wet
+    name: "${t_cal_wet}"
+    icon: mdi:water
+    unit_of_measurement: "V"
+    min_value: 0
+    max_value: 3.3
+    step: 0.001
+    initial_value: 1.30
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_cal
+  - platform: template
+    id: log_interval
+    name: "${t_log_int}"
+    icon: mdi:timer-outline
+    unit_of_measurement: "min"
+    min_value: 10
+    max_value: 360
+    step: 5
+    initial_value: 60
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_set
+  - platform: template
+    id: report_every
+    name: "${t_report}"
+    icon: mdi:upload-network
+    min_value: 1
+    max_value: 48
+    step: 1
+    initial_value: 6
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_set
+  - platform: template
+    id: service_timeout
+    name: "${t_svc_to}"
+    icon: mdi:timer-sand
+    unit_of_measurement: "min"
+    min_value: 5
+    max_value: 240
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_set
+  - platform: template
+    id: settle_ms
+    name: "${t_settle}"
+    icon: mdi:timer-cog-outline
+    unit_of_measurement: "ms"
+    min_value: 20
+    max_value: 3000
+    step: 10
+    initial_value: 100
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: probe_freq
+    name: "${t_freq}"
+    icon: mdi:sine-wave
+    unit_of_measurement: "kHz"
+    min_value: 200
+    max_value: 4000
+    step: 50
+    initial_value: 1000
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: probe_duty
+    name: "${t_duty}"
+    icon: mdi:square-wave
+    unit_of_measurement: "%"
+    min_value: 20
+    max_value: 50
+    step: 1
+    initial_value: 40
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: mqtt_port
+    name: "${t_mqtt_port}"
+    internal: true
+    min_value: 1
+    max_value: 65535
+    step: 1
+    initial_value: 1883
+    optimistic: true
+    restore_value: true
+    mode: box
+    web_server:
+      sorting_group_id: grp_mqtt
+
+text:
+  - platform: template
+    id: wifi_ssid_in
+    name: "${t_wifi_ssid}"
+    internal: true
+    optimistic: true
+    mode: text
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_wifi
+  - platform: template
+    id: wifi_pass_in
+    name: "${t_wifi_pass}"
+    internal: true
+    optimistic: true
+    mode: password
+    max_length: 64
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_wifi
+  - platform: template
+    id: web_user
+    name: "${t_web_user}"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: text
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_set
+  - platform: template
+    id: web_pass
+    name: "${t_web_pass}"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: password
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_set
+  - platform: template
+    id: mqtt_host
+    name: "${t_mqtt_host}"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: text
+    max_length: 64
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_mqtt
+  - platform: template
+    id: mqtt_user
+    name: "${t_mqtt_user}"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: text
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_mqtt
+  - platform: template
+    id: mqtt_pass
+    name: "${t_mqtt_pass}"
+    internal: true
+    optimistic: true
+    restore_value: true
+    mode: password
+    max_length: 32
+    initial_value: ""
+    web_server:
+      sorting_group_id: grp_mqtt
+
+button:
+  - platform: template
+    name: "${t_set_dry}"
+    icon: mdi:water-off
+    entity_category: config
+    on_press:
+      - number.set:
+          id: cal_dry
+          value: !lambda 'return id(g_raw);'
+    web_server:
+      sorting_group_id: grp_cal
+  - platform: template
+    name: "${t_set_wet}"
+    icon: mdi:water
+    entity_category: config
+    on_press:
+      - number.set:
+          id: cal_wet
+          value: !lambda 'return id(g_raw);'
+    web_server:
+      sorting_group_id: grp_cal
+  - platform: template
+    name: "${t_mqtt_apply}"
+    internal: true
+    on_press:
+      - lambda: 'global_preferences->sync();'
+      - delay: 300ms
+      - lambda: 'App.safe_reboot();'
+    web_server:
+      sorting_group_id: grp_mqtt
+  - platform: template
+    name: "${t_wifi_apply}"
+    internal: true
+    on_press:
+      - lambda: |-
+          if (id(wifi_ssid_in).state.empty()) return;
+          id(wifi_comp).save_wifi_sta(id(wifi_ssid_in).state, id(wifi_pass_in).state);
+          global_preferences->sync();
+      - delay: 500ms
+      - lambda: 'App.safe_reboot();'
+    web_server:
+      sorting_group_id: grp_wifi
+  - platform: template
+    name: "${t_web_apply}"
+    internal: true
+    on_press:
+      - lambda: 'global_preferences->sync();'
+      - delay: 300ms
+      - lambda: 'App.safe_reboot();'
+    web_server:
+      sorting_group_id: grp_set
+  - platform: template
+    name: "${t_power_off}"
+    internal: true
+    on_press:
+      - script.execute: power_off
+    web_server:
+      sorting_group_id: grp_set
+      sorting_weight: 2
+  - platform: template
+    name: "${t_clear_log}"
+    internal: true
+    on_press:
+      - lambda: 'plog::clear();'
+      - component.update: log_count
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    name: "${t_net_reset}"
+    internal: true
+    on_press:
+      - script.execute: network_reset
+    web_server:
+      sorting_group_id: grp_dbg
+
+sensor:
+  - platform: adc
+    id: moist_adc
+    name: "ADC moisture"
+    internal: true
+    pin: ${pin_moist}
+    attenuation: 12db
+    samples: 8
+    update_interval: never
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: adc
+    id: vbat_adc
+    name: "ADC battery"
+    internal: true
+    pin: ${pin_vbat}
+    attenuation: 12db
+    samples: 8
+    update_interval: never
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: soil_moisture
+    force_update: true             # HA records every reading, also unchanged ones
+    name: "${t_moist}"
+    unit_of_measurement: "%"
+    icon: mdi:water-percent
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: 'return id(g_moist);'
+    web_server:
+      sorting_group_id: grp_values
+  - platform: template
+    id: soil_raw
+    force_update: true             # HA records every reading, also unchanged ones
+    name: "${t_raw}"
+    unit_of_measurement: "V"
+    accuracy_decimals: 3
+    update_interval: never
+    entity_category: diagnostic
+    lambda: 'return id(g_raw);'
+    web_server:
+      sorting_group_id: grp_values
+  - platform: template
+    id: battery_voltage
+    force_update: true             # HA records every reading, also unchanged ones
+    name: "${t_batt}"
+    unit_of_measurement: "V"
+    device_class: voltage
+    accuracy_decimals: 2
+    update_interval: never
+    lambda: 'return id(g_vbat);'
+    web_server:
+      sorting_group_id: grp_values
+  - platform: template
+    id: soil_spread
+    name: "${t_spread}"
+    unit_of_measurement: "V"
+    accuracy_decimals: 4
+    update_interval: never
+    entity_category: diagnostic
+    lambda: 'return id(g_spread);'
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: report_fail_sensor
+    name: "${t_report_fail}"
+    icon: mdi:alert-circle-outline
+    accuracy_decimals: 0
+    update_interval: never
+    entity_category: diagnostic
+    lambda: 'return (float) id(g_report_fail);'
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: log_count
+    name: "${t_logcount}"
+    icon: mdi:database
+    accuracy_decimals: 0
+    update_interval: never
+    entity_category: diagnostic
+    lambda: 'return (float) plog::size();'
+    web_server:
+      sorting_group_id: grp_dbg
+
+text_sensor:
+  - platform: template
+    id: hub_state
+    name: "${t_hub_state}"
+    icon: mdi:access-point-network
+    entity_category: diagnostic
+    update_interval: never
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: boot_hist
+    name: "${t_boots}"
+    icon: mdi:restart
+    entity_category: diagnostic
+    update_interval: never
+    web_server:
+      sorting_group_id: grp_dbg
+  - platform: template
+    id: fw_ver
+    name: "${t_fw}"
+    icon: mdi:chip
+    entity_category: diagnostic
+    update_interval: never
+    web_server:
+      sorting_group_id: grp_values
+      sorting_weight: 99
+  - platform: template
+    id: last_report
+    name: "${t_last_report}"
+    icon: mdi:clock-check-outline
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      time_t now = ::time(nullptr);
+      if (now < 1700000000) return {std::string("?")};
+      char b[32];
+      struct tm tmv;
+      localtime_r(&now, &tmv);
+      strftime(b, sizeof(b), "%Y-%m-%d %H:%M", &tmv);
+      return {std::string(b)};
+    web_server:
+      sorting_group_id: grp_values
+  - platform: wifi_info
+    ip_address:
+      name: "${t_ip}"
+      entity_category: diagnostic
+      web_server:
+        sorting_group_id: grp_wifi
+    ssid:
+      name: "${t_wifi_cur}"
+      entity_category: diagnostic
+      web_server:
+        sorting_group_id: grp_wifi
+
+interval:
+  - interval: 10s
+    then:
+      - if:
+          condition:
+            lambda: 'return id(g_service);'
+          then:
+            - if:
+                condition: wifi.connected
+                then:
+                  - logger.log:
+                      format: "STATUS: service mode, WiFi OK, MQTT %s, log %u records"
+                      args: ['id(mqtt_client).is_connected() ? "OK" : "not connected"', '(unsigned) plog::size()']
+                else:
+                  - logger.log: "STATUS: service mode, WiFi not connected (setup WiFi active?)"
+            - script.execute: do_measure
+            - script.execute: show_code
+            - script.execute: read_extra
+            - script.execute: publish_all
+            - if:                  # safety timeout back to normal mode
+                condition:
+                  lambda: |-
+                    return millis() - id(g_service_t0) > (uint32_t) (id(service_timeout).state * 60000.0f);
+                then:
+                  - script.execute: service_off
+
+script:
+  # ---------------------------------------------------------------- what to do after a wake
+  - id: wake_flow
+    then:
+      - lambda: |-
+          // web page login from the settings (else the defaults from secrets.yaml)
+          if (!id(web_user).state.empty() && !id(web_pass).state.empty()) {
+            plog::web_user_s = id(web_user).state;
+            plog::web_pass_s = id(web_pass).state;
+            web_server_base::global_web_server_base->set_auth_username(plog::web_user_s.c_str());
+            web_server_base::global_web_server_base->set_auth_password(plog::web_pass_s.c_str());
+          }
+      - if:
+          condition:               # not set up yet (first start / network reset), after power off or after an update
+            lambda: 'return !id(g_setup_done) || (id(g_start_service) && !id(g_timer_wake));'
+          then:
+            - lambda: 'id(g_start_service) = false;'
+            - script.execute: service_on
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(g_timer_wake);'
+                then:              # ---- timer wake: log, send to the hub, report only every Nth time
+                  - script.execute: log_reading
+                  - script.execute: hub_sync
+                  - script.wait: hub_sync
+                  - if:
+                      condition:
+                        lambda: |-
+                          float r = id(report_every).state;
+                          int n = (std::isnan(r) || r < 1.0f) ? 6 : (int) r;
+                          return (plog::rtc_wakes % n) == 0 && id(g_wifi_ok) && !id(g_hub_ok);   // the hub forwards to MQTT
+                      then:
+                        - script.execute: radio_wifi
+                        - wait_until:
+                            condition:
+                              lambda: 'return id(mqtt_host).state.empty() || id(mqtt_client).is_connected();'
+                            timeout: 20s
+                        - delay: 1s        # let the connection settle (discovery, subscriptions)
+                        - script.execute: read_extra
+                        - script.wait: read_extra
+                        - script.execute: publish_all
+                        - script.execute: send_report   # waits for the broker's echo (max ~12 s)
+                        - script.wait: send_report
+                        - delay: 300ms
+                  - script.execute: go_to_sleep
+                else:              # ---- RST button / power-on: blink code, hub, then (no hub) report + BLE window
+                  - script.execute: show_code
+                  - script.execute: log_reading
+                  - script.execute: hub_sync
+                  - script.wait: hub_sync
+                  - if:
+                      condition:
+                        lambda: 'return id(g_hub_ok);'
+                      then:        # the hub took the readings: no WiFi, no Bluetooth (phone talks to the hub)
+                        - script.wait: show_code
+                        - delay: 500ms
+                        - output.turn_on: status_led   # one 1 s glow AFTER the code = delivered to the hub
+                        - delay: 1s                    # (low battery glows BEFORE the code)
+                        - output.turn_off: status_led
+                        - delay: 3s        # time to start a BOOT long press (service mode / power off)
+                        - wait_until:
+                            condition:
+                              binary_sensor.is_off: boot_button
+                            timeout: 15s
+                        - script.wait: btn_hold
+                        - delay: 300ms
+                        - if:
+                            condition:
+                              lambda: 'return !id(g_service);'
+                            then:
+                              - script.execute: go_to_sleep
+                      else:
+                        - script.execute: ble_on
+                        - if:
+                            condition:
+                              lambda: 'return id(g_wifi_ok) || !id(mqtt_host).state.empty();'
+                            then:
+                              - script.execute: radio_wifi
+                              - wait_until:
+                                  condition:
+                                    lambda: 'return id(mqtt_host).state.empty() || id(mqtt_client).is_connected();'
+                                  timeout: 20s
+                        - delay: 1s
+                        - script.execute: read_extra
+                        - script.wait: read_extra
+                        - script.execute: publish_all
+                        - script.execute: send_report
+                        - script.wait: send_report
+                        - script.wait: show_code
+                        - wait_until:      # 2 min for the phone page / BOOT long press
+                            condition:
+                              lambda: 'return id(g_service) || (id(g_ble_clients) > 0);'
+                            timeout: 120s
+                        - wait_until:      # stay awake while a phone is connected (max 5 min)
+                            condition:
+                              lambda: 'return id(g_service) || id(g_ble_clients) == 0;'
+                            timeout: 300s
+                        - wait_until:
+                            condition:
+                              binary_sensor.is_off: boot_button
+                            timeout: 15s
+                        - script.wait: btn_hold
+                        - delay: 300ms
+                        - if:
+                            condition:
+                              lambda: 'return !id(g_service);'
+                            then:
+                              - script.execute: go_to_sleep
+
+  # ---------------------------------------------------------------- hub (ESP-NOW)
+  - id: hub_sync
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return id(hub_enable).state && !id(g_service);'
+          then:
+            - lambda: |-
+                pnet::Probe &p = pnet::P;
+                p.c = id(espnow_c);
+                for (int i = 0; i < 6; i++) p.hub[i] = (uint8_t) (id(g_hub_mac) >> (8 * (5 - i)));
+                p.ch = id(g_hub_ch) ? id(g_hub_ch) : 1;
+                p.cfg_ver = id(g_cfg_ver);
+                p.unsent = id(g_unsent);
+                p.fails = id(g_hub_fail);
+                // look for the hub on all channels: not paired yet or 3 wakes without an answer;
+                // on timer wakes only every 6th time (scanning costs ~1 s of radio)
+                p.allow_scan = (!pnet::hub_known() || p.fails >= 3) && (!id(g_timer_wake) || (plog::rtc_wakes % 6) == 0);
+                pnet::DataHdr &h = p.cur;
+                memset(&h, 0, sizeof(h));
+                h.vbat_mv = (uint16_t) lroundf(id(g_vbat) * 1000.0f);
+                h.moist10 = (uint16_t) lroundf(id(g_moist) * 10.0f);
+                h.raw_mv = (uint16_t) lroundf(id(g_raw) * 1000.0f);
+                h.li = (uint16_t) id(log_interval).state;
+                h.dry_mv = (uint16_t) lroundf(id(cal_dry).state * 1000.0f);
+                h.wet_mv = (uint16_t) lroundf(id(cal_wet).state * 1000.0f);
+                h.re = (uint8_t) id(report_every).state;
+                h.st = (uint8_t) id(service_timeout).state;
+                memcpy(h.fw, "${fw_short}\0\0\0\0\0\0\0\0", sizeof(h.fw));
+                p.phase = 0;
+                p.result = "no hub";
+                if (pnet::hub_known() || p.allow_scan) {   // radio on only when there is something to do
+                  id(espnow_c).enable();
+                  pnet::start();
+                }
+            - while:
+                condition:
+                  lambda: 'return pnet::step();'
+                then:
+                  - delay: 5ms
+            - lambda: |-
+                pnet::Probe &p = pnet::P;
+                uint64_t mac = 0;
+                for (int i = 0; i < 6; i++) mac = (mac << 8) | p.hub[i];
+                id(g_hub_mac) = mac;
+                id(g_hub_ch) = p.ch;
+                id(g_hub_fail) = p.fails;
+                id(g_unsent) = p.unsent;
+                id(g_hub_rssi) = p.rssi;
+                id(g_hub_ok) = p.delivered > 0 || strcmp(p.result, "ok") == 0;
+                ESP_LOGI("hub", "%s: %u readings delivered, %u waiting, channel %u, rssi %d",
+                         p.result, (unsigned) p.delivered, (unsigned) p.unsent, p.ch, p.rssi);
+                if (p.settings_rx) {                     // new settings sent by the hub
+                  const pnet::Ack &s = p.settings;
+                  if (s.li) { auto c = id(log_interval).make_call(); c.set_value(s.li); c.perform(); }
+                  if (s.re) { auto c = id(report_every).make_call(); c.set_value(s.re); c.perform(); }
+                  if (s.st) { auto c = id(service_timeout).make_call(); c.set_value(s.st); c.perform(); }
+                  if (s.dry_mv) { auto c = id(cal_dry).make_call(); c.set_value(s.dry_mv / 1000.0f); c.perform(); }
+                  if (s.wet_mv) { auto c = id(cal_wet).make_call(); c.set_value(s.wet_mv / 1000.0f); c.perform(); }
+                  if (s.cmd & pnet::CMD_CLEAR_LOG) { plog::clear(); id(g_unsent) = 0; }
+                  id(g_cfg_ver) = s.cfg_ver;
+                  ESP_LOGI("hub", "new settings %u applied", s.cfg_ver);
+                }
+                if (!id(espnow_c).is_disabled()) {
+                  id(espnow_c).disable();
+                  if (wifi::global_wifi_component->is_disabled()) esp_wifi_stop();   // radio off again
+                }
+                global_preferences->sync();
+            - text_sensor.template.publish:
+                id: hub_state
+                state: !lambda |-
+                  char b[64];
+                  snprintf(b, sizeof(b), "%s, %d dBm, ch %u, %u waiting", pnet::P.result, id(g_hub_rssi),
+                           id(g_hub_ch), (unsigned) id(g_unsent));
+                  return std::string(b);
+
+  # ---------------------------------------------------------------- radios
+  - id: radio_wifi
+    then:
+      - wifi.enable:
+      - lambda: |-
+          if (!id(mqtt_host).state.empty()) {
+            id(mqtt_client).set_broker_address(id(mqtt_host).state);
+            id(mqtt_client).set_broker_port((uint16_t) id(mqtt_port).state);
+            id(mqtt_client).set_username(id(mqtt_user).state);
+            id(mqtt_client).set_password(id(mqtt_pass).state);
+            id(mqtt_client).enable();
+          }
+
+  - id: ble_on
+    then:
+      - ble.enable:
+      - script.execute: update_status
+
+  # ---------------------------------------------------------------- measuring, logging, reporting
+  - id: do_measure
+    then:
+      - lambda: |-
+          // battery: divider on, 4 samples
+          id(div_en).turn_on();                    // DIV_EN low: divider conducts
+          delay(30);
+          float vb = 0;
+          for (int i = 0; i < 4; i++) vb += id(vbat_adc).sample();
+          vb = vb / 4.0f * 2.0f;
+          id(div_en).turn_off();                   // DIV_EN off: no divider current
+          if (std::isnan(vb) || vb < 1.0f) ESP_LOGW("measure", "battery ADC returned %.3f V – ADC not ready?", vb);
+          id(g_vbat) = vb;
+          // probe: square wave (default 1 MHz, 40 % duty: keeps the dry end inside the ADC's accurate
+          // range of ~2.5 V), wait for the peak detector to settle (simulated: < 25 ms), 32 samples
+          float fk = id(probe_freq).state, du = id(probe_duty).state;
+          if (std::isnan(fk) || fk < 100.0f) fk = 1000.0f;
+          if (std::isnan(du) || du < 10.0f || du > 60.0f) du = 40.0f;
+          id(probe_drv).update_frequency(fk * 1000.0f);
+          id(probe_drv).set_level(du / 100.0f);
+          float st = id(settle_ms).state;
+          if (std::isnan(st) || st < 20.0f) st = 100.0f;
+          delay((uint32_t) st);
+          float s[32];
+          for (int i = 0; i < 32; i++) { s[i] = id(moist_adc).sample(); delay(3); }
+          id(probe_drv).set_level(0.0f);
+          std::sort(s, s + 32);
+          float sum = 0, sq = 0;
+          for (int i = 4; i < 28; i++) sum += s[i];   // trimmed mean: drop 4 lowest + 4 highest
+          float mean = sum / 24.0f;
+          for (int i = 4; i < 28; i++) sq += (s[i] - mean) * (s[i] - mean);
+          // the drive swing equals the battery voltage: scale to a fixed 3.30 V
+          float k = 3.30f / std::max(2.5f, vb);
+          float v = mean * k;
+          id(g_raw) = v;
+          id(g_spread) = sqrtf(sq / 24.0f) * k;       // noise of this reading (V)
+          float dry = std::isnan(id(cal_dry).state) ? 2.30f : id(cal_dry).state;
+          float wet = std::isnan(id(cal_wet).state) ? 1.30f : id(cal_wet).state;
+          float m = (fabsf(dry - wet) < 0.01f) ? 0.0f : (dry - v) / (dry - wet) * 100.0f;
+          id(g_moist) = std::max(0.0f, std::min(100.0f, m));
+
+  - id: log_reading                # store this wake's reading once (after a possible clock sync)
+    then:
+      - lambda: |-
+          if (id(g_logged)) return;
+          plog::Rec r;
+          r.t = pnet::now_s();             // below 1.7e9 = seconds since start (clock not set yet)
+          r.moist10 = (uint16_t) lroundf(id(g_moist) * 10.0f);
+          r.vbat_mv = (uint16_t) lroundf(id(g_vbat) * 1000.0f);
+          plog::append(r);
+          id(g_logged) = true;
+          if (id(g_unsent) < plog::capacity()) id(g_unsent) += 1;   // for the hub
+      - component.update: log_count
+      - script.execute: update_status
+
+  - id: publish_all
+    then:
+      - component.update: last_report
+      - component.update: soil_moisture
+      - component.update: soil_raw
+      - component.update: soil_spread
+      - component.update: battery_voltage
+      - component.update: log_count
+      - script.execute: update_status
+
+  - id: send_report                # one retained JSON report, confirmed by its own echo, 3 tries
+    then:
+      - lambda: "plog::note_result(id(mqtt_client).is_connected() ? 'f' : 'n');"
+      - if:
+          condition:
+            lambda: 'return id(mqtt_client).is_connected();'
+          then:
+            - lambda: |-
+                id(g_seq) += 1;
+                id(g_ack) = false;
+            - repeat:
+                count: 3
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return !id(g_ack) && id(mqtt_client).is_connected();'
+                      then:
+                        - mqtt.publish:
+                            topic: !lambda 'return std::string(App.get_name().c_str()) + "/report";'
+                            qos: 1
+                            retain: true
+                            payload: !lambda |-
+                              char b[600];
+                              time_t now = ::time(nullptr);
+                              char ts[24] = "?";
+                              if (now > 1700000000) { struct tm tmv; localtime_r(&now, &tmv); strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tmv); }
+                              snprintf(b, sizeof(b),
+                                       "{\"seq\":%u,\"time\":\"%s\",\"t\":%u,\"moisture\":%.1f,\"raw\":%.3f,\"battery\":%.2f,\"spread\":%.3f,\"log\":%u,\"failed\":%u,\"wakes\":%u,\"boots\":\"%s\",\"fw\":\"${fw_version}\"}",
+                                       (unsigned) id(g_seq), ts, (unsigned) plog::now_or_zero(), id(g_moist), id(g_raw),
+                                       id(g_vbat), id(g_spread), (unsigned) plog::size(), (unsigned) id(g_report_fail),
+                                       (unsigned) plog::rtc_wakes, plog::boot_history().c_str());
+                              return std::string(b);
+                        - wait_until:
+                            condition:
+                              lambda: 'return id(g_ack);'
+                            timeout: 4s
+            - if:
+                condition:
+                  lambda: 'return !id(g_ack);'
+                then:
+                  - lambda: 'id(g_report_fail) += 1;'
+                  - logger.log:
+                      level: WARN
+                      format: "Report %u NOT confirmed by the broker"
+                      args: ['(unsigned) id(g_seq)']
+                else:
+                  - lambda: "plog::note_result('r');"
+                  - logger.log:
+                      format: "Report %u confirmed by the broker"
+                      args: ['(unsigned) id(g_seq)']
+            - component.update: report_fail_sensor
+
+  - id: read_extra                 # extended in plant_sensor_universal_env.yaml
+    then:
+      - delay: 1ms
+
+  - id: update_status              # Bluetooth status text for the phone page
+    then:
+      - if:
+          condition: ble.enabled
+          then:
+            - ble_server.characteristic.set_value:
+                id: ch_status
+                value: !lambda |-
+                  char b[512];
+                  snprintf(b, sizeof(b),
+                           "m=%.1f;raw=%.3f;vb=%.2f;dry=%.3f;wet=%.3f;n=%u;cap=%u;t=%u;svc=%d;li=%d;re=%d;st=%d;"
+                           "wc=%d;mc=%d;mh=%s;mp=%d;mu=%s;wu=%s;fw=${fw_version};hub=%s;bh=%s;name=%s",
+                           id(g_moist), id(g_raw), id(g_vbat), id(cal_dry).state, id(cal_wet).state,
+                           (unsigned) plog::size(), (unsigned) plog::capacity(), (unsigned) plog::now_or_zero(),
+                           id(g_service) ? 1 : 0, (int) id(log_interval).state, (int) id(report_every).state,
+                           (int) id(service_timeout).state, id(wifi_comp).is_connected() ? 1 : 0,
+                           id(mqtt_client).is_connected() ? 1 : 0, id(mqtt_host).state.c_str(),
+                           (int) id(mqtt_port).state, id(mqtt_user).state.c_str(), id(web_user).state.c_str(),
+                           id(hub_state).state.c_str(), plog::boot_history().substr(0, 110).c_str(), App.get_name().c_str());
+                  std::string s(b);
+                  return std::vector<uint8_t>(s.begin(), s.end());
+
+  - id: ble_cmd                    # phone commands that need actions
+    then:
+      - if:
+          condition:
+            lambda: 'return id(g_cmd) == 1;'
+          then:
+            - number.set:
+                id: cal_dry
+                value: !lambda 'return id(g_raw);'
+      - if:
+          condition:
+            lambda: 'return id(g_cmd) == 2;'
+          then:
+            - number.set:
+                id: cal_wet
+                value: !lambda 'return id(g_raw);'
+      - if:
+          condition:
+            lambda: 'return id(g_cmd) == 3;'
+          then:
+            - script.execute: do_measure
+            - script.execute: publish_all
+      - if:                        # new WiFi / MQTT settings from the phone: restart to use them
+          condition:
+            lambda: 'return id(g_cmd) == 10;'
+          then:
+            - lambda: 'global_preferences->sync();'
+            - delay: 1500ms
+            - lambda: 'App.safe_reboot();'
+      - if:
+          condition:
+            lambda: 'return id(g_cmd) == 11;'
+          then:
+            - lambda: 'id(g_cmd) = 0;'
+            - delay: 1s
+            - script.execute: power_off
+      - lambda: 'id(g_cmd) = 0;'
+      - if:                        # the phone set the clock: store the pending reading now
+          condition:
+            lambda: 'return !id(g_logged) && plog::now_or_zero() != 0;'
+          then:
+            - script.execute: log_reading
+      - script.execute: update_status
+
+  # ---------------------------------------------------------------- service mode
+  - id: service_on
+    then:
+      - lambda: |-
+          id(g_service) = true;
+          id(g_service_t0) = millis();
+      - deep_sleep.prevent: sleeper
+      - switch.template.publish:
+          id: service_switch
+          state: ON
+      - script.execute: radio_wifi
+      - if:                        # first setup: WiFi only (its own setup network + Bluetooth on
+          condition:               # the same radio make phones fail to join)
+            lambda: 'return id(g_setup_done);'
+          then:
+            - script.execute: ble_on
+      - script.stop: show_code
+      - repeat:                    # 3 fast flashes = service mode on
+          count: 3
+          then:
+            - output.turn_on: status_led
+            - delay: 120ms
+            - output.turn_off: status_led
+            - delay: 120ms
+      - logger.log: "Service mode ON"
+
+  - id: service_off
+    then:
+      - lambda: |-
+          id(g_service) = false;
+          id(g_setup_done) = true;
+      - switch.template.publish:
+          id: service_switch
+          state: OFF
+      - script.execute: log_reading
+      - script.stop: show_code
+      - output.turn_on: status_led # one long flash = normal mode
+      - delay: 1500ms
+      - output.turn_off: status_led
+      - logger.log: "Service mode OFF - going to sleep"
+      - lambda: 'global_preferences->sync();'
+      - delay: 500ms
+      - deep_sleep.allow: sleeper
+      - script.execute: go_to_sleep
+
+  - id: go_to_sleep
+    then:
+      - lambda: |-
+          float m = id(log_interval).state;
+          if (std::isnan(m) || m < 10.0f || m > 360.0f) m = 60.0f;
+          bool low = id(g_vbat) > 0.5f && id(g_vbat) < 3.0f;
+          plog::note_sleep(low ? 360 : (uint16_t) m);
+          ESP_LOGI("sleep", "battery %.2f V -> sleeping %u min%s", id(g_vbat), low ? 360u : (unsigned) m,
+                   low ? " (battery low)" : "");
+          plog::hold_straps();
+      - if:
+          condition:
+            lambda: 'return id(g_vbat) > 0.5f && id(g_vbat) < 3.0f;'
+          then:
+            - deep_sleep.enter:
+                id: sleeper
+                sleep_duration: 6h   # battery low: log only every 6 h
+          else:
+            - deep_sleep.enter:
+                id: sleeper
+                sleep_duration: !lambda |-
+                  float m = id(log_interval).state;
+                  if (std::isnan(m) || m < 10.0f || m > 360.0f) m = 60.0f;
+                  return (uint32_t) (m * 60000.0f);
+
+  # ---------------------------------------------------------------- BOOT button
+  - id: btn_hold
+    mode: restart
+    then:
+      - delay: 2s
+      - if:
+          condition:
+            binary_sensor.is_on: boot_button
+          then:
+            - lambda: 'id(g_btn_stage) = 1;'
+            - output.turn_off: status_led    # LED off + one blink: release now = service toggle
+            - delay: 300ms
+            - output.turn_on: status_led
+            - delay: 150ms
+            - output.turn_off: status_led
+            - delay: 2550ms                  # 5 s held
+            - if:
+                condition:
+                  binary_sensor.is_on: boot_button
+                then:
+                  - lambda: 'id(g_btn_stage) = 3;'
+                  - repeat:                  # two blinks: release now = POWER OFF
+                      count: 2
+                      then:
+                        - output.turn_on: status_led
+                        - delay: 150ms
+                        - output.turn_off: status_led
+                        - delay: 200ms
+                  - delay: 4300ms            # 10 s held
+                  - if:
+                      condition:
+                        binary_sensor.is_on: boot_button
+                      then:
+                        - lambda: 'id(g_btn_stage) = 2;'
+                        - script.execute: network_reset
+
+  - id: power_off                # deep sleep without a timer: only RST wakes it, into service mode
+    then:
+      - logger.log: "POWER OFF - press RST to start (in service mode)"
+      - lambda: |-
+          id(g_service) = false;
+          id(g_start_service) = true;
+      - script.execute: log_reading
+      - repeat:                    # three slow blinks = off
+          count: 3
+          then:
+            - output.turn_on: status_led
+            - delay: 500ms
+            - output.turn_off: status_led
+            - delay: 400ms
+      - lambda: 'global_preferences->sync();'
+      - delay: 300ms
+      - lambda: |-
+          plog::note_result('o');
+          plog::hist_save();
+          App.run_safe_shutdown_hooks();
+          plog::hold_straps();
+          esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+          esp_deep_sleep_start();
+
+  - id: network_reset
+    then:
+      - logger.log: "NETWORK RESET: WiFi + MQTT settings erased, calibration and log kept"
+      - repeat:                    # fast blinking = reset
+          count: 15
+          then:
+            - output.turn_on: status_led
+            - delay: 60ms
+            - output.turn_off: status_led
+            - delay: 60ms
+      - lambda: |-
+          id(wifi_comp).save_wifi_sta("", "");
+          id(g_setup_done) = false;
+          id(g_wifi_ok) = false;
+      - text.set:
+          id: mqtt_host
+          value: ""
+      - text.set:
+          id: mqtt_user
+          value: ""
+      - text.set:
+          id: mqtt_pass
+          value: ""
+      - lambda: 'global_preferences->sync();'
+      - delay: 500ms
+      - lambda: 'App.safe_reboot();'
+
+  # ---------------------------------------------------------------- moisture blink code
+  - id: show_code
+    then:
+      - lambda: 'id(t0) = millis();'
+      - if:                        # low battery: one long glow first
+          condition:
+            lambda: 'return id(g_vbat) < 3.1f;'
+          then:
+            - output.turn_on: status_led
+            - delay: 1500ms
+            - output.turn_off: status_led
+            - delay: 600ms
+      - while:                     # blink ~6 s: 600 ms on/off when dry ... 75 ms when wet
+          condition:
+            lambda: 'return millis() - id(t0) < 6000;'
+          then:
+            - output.turn_on: status_led
+            - delay: !lambda 'return (uint32_t) (600.0f - id(g_moist) * 5.25f);'
+            - output.turn_off: status_led
+            - delay: !lambda 'return (uint32_t) (600.0f - id(g_moist) * 5.25f);'

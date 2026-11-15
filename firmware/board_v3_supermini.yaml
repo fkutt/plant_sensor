@@ -1,0 +1,12 @@
+# Pin map: v3 board with an ESP32-C3 SuperMini (JP1/JP3/JP4 on pads 2-1 "S", JP2 fitted).
+# Choose the board in the top-level file (packages: board: !include ...).
+substitutions:
+  pin_moist: GPIO4
+  pin_vbat: GPIO3
+  pin_probe: GPIO0
+  pin_div: GPIO10
+  pin_led: GPIO8
+  pin_sens: GPIO1
+  pin_sda: GPIO20
+  pin_scl: GPIO21
+  board_name: "v3 SuperMini"

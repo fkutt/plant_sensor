@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f6f4a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Czujnik roślin</title>
+<style>
+  :root {
+    --bg: #f3f5f2; --card: #ffffff; --ink: #1b221e; --muted: #6b756f; --line: #e1e6e2; --soft: #eef2ee;
+    --accent: #1f6f4a; --accent-ink: #ffffff; --moist: #2a7fd4; --batt: #c9862b; --warn: #b3412f; --ok: #2e8b57;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111513; --card: #1a1f1c; --ink: #e6ebe7; --muted: #98a29c; --line: #29312d; --soft: #222925;
+            --accent: #3fa776; --accent-ink: #0c120f; --moist: #5aa6ef; --batt: #e0a24a; --warn: #e2735f; --ok: #5cc28c; }
+  }
+  * { box-sizing: border-box; }
+  html, body { overscroll-behavior-y: none; }          /* no pull-to-refresh: it would drop the Bluetooth link */
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+           padding: calc(14px + env(safe-area-inset-top)) 0 6px; }
+  header h1 { font-size: 21px; margin: 0; letter-spacing: -0.01em; }
+  main { padding-bottom: 48px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+           border-radius: 10px; padding: 10px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; font-size: 14px;
+          color: var(--muted); background: var(--card); max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--warn); } .dot.busy { background: var(--batt); }
+  .bar { height: 3px; border-radius: 2px; overflow: hidden; margin: 4px 0 0; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .err { color: var(--warn); font-size: 14px; margin: 8px 0 0; }
+
+  /* sensors */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 12px 0; }
+  .tile { text-align: left; padding: 12px 14px; border-radius: 14px; display: flex; flex-direction: column; gap: 2px; min-height: 112px; }
+  .tile.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .tile .nm { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .val { font-size: 32px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; line-height: 1.15; }
+  .tile .val small { font-size: 16px; font-weight: 500; color: var(--muted); margin-left: 2px; }
+  .tile .meter { height: 4px; border-radius: 2px; background: var(--soft); overflow: hidden; margin: 4px 0 6px; }
+  .tile .meter i { display: block; height: 100%; background: var(--moist); }
+  .tile .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .sub.warn { color: var(--warn); }
+  .empty { text-align: center; padding: 36px 16px 28px; }
+  .empty img { width: 64px; height: 64px; opacity: .9; }
+  .empty p { color: var(--muted); margin: 10px auto 18px; max-width: 340px; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin: 12px 0; }
+  .dhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .dhead h2 { font-size: 17px; margin: 0; overflow-wrap: anywhere; }
+  button.icon { flex: none; width: 38px; height: 38px; padding: 0; border-radius: 50%; font-size: 17px; line-height: 1; color: var(--muted); }
+  .dhead .muted { margin: 2px 0 0; }
+  .seg { display: flex; gap: 4px; flex-wrap: wrap; }
+  .seg button { padding: 5px 11px; border-radius: 8px; font-size: 13px; border-color: transparent; background: var(--soft); }
+  .seg button.on { background: var(--accent); color: var(--accent-ink); }
+  canvas { width: 100%; height: 230px; display: block; touch-action: pan-y; margin-top: 10px; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+
+  /* settings (collapsed by default) */
+  details.settings { margin-top: 22px; }
+  details.settings > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+                               color: var(--muted); font-size: 15px; padding: 12px; border-top: 1px solid var(--line); }
+  details.settings > summary::-webkit-details-marker { display: none; }
+  details.settings > summary::after { content: "▾"; transition: transform .2s; }
+  details.settings[open] > summary::after { transform: rotate(180deg); }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  h3 { font-size: 12px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .small { font-size: 13px; }
+  details.sub { margin-top: 12px; }
+  details.sub > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  input { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; word-break: break-word; }
+  .note { border-radius: 10px; padding: 8px 10px; font-size: 13px; background: var(--soft); margin: 8px 0 0; }
+  .note.warn { background: color-mix(in srgb, var(--warn) 12%, var(--card)); }
+  footer { color: var(--muted); font-size: 12px; margin: 16px 2px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1 data-t="title">Plant sensor</h1>
+  <button class="pill" id="pill"><span class="dot" id="linkDot"></span><span id="linkTxt">–</span></button>
+</header>
+<div class="bar"><i id="progress"></i></div>
+<p class="err" id="error" hidden></p>
+
+<main>
+  <section class="empty" id="empty" hidden>
+    <img src="icon.svg" alt="">
+    <p data-t="emptyTxt">Connect to the hub to see your sensors.</p>
+    <button class="primary" id="emptyConnect" data-t="connectHub">Connect to the hub</button>
+  </section>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card" id="detail" hidden>
+    <div class="dhead">
+      <div style="min-width:0"><h2 id="dName">–</h2><p class="muted small" id="dSub"></p></div>
+      <button class="icon" id="dRename" title="Zmień nazwę" aria-label="Zmień nazwę">✎</button>
+    </div>
+    <div class="row" style="justify-content:space-between;margin-top:10px">
+      <div class="seg" id="ranges">
+        <button data-h="24" data-t="r24">24 h</button><button data-h="168" class="on" data-t="r7">7 days</button>
+        <button data-h="720" data-t="r30">30 days</button><button data-h="0" data-t="rall">All</button>
+      </div>
+    </div>
+    <canvas id="chart"></canvas>
+    <div class="legend"><span><i style="background:var(--moist)"></i><span data-t="lgMoist">Soil moisture %</span></span>
+      <span><i style="background:var(--batt)"></i><span data-t="lgBatt">Battery V</span></span></div>
+  </section>
+
+  <details class="settings" id="settings">
+    <summary data-t="settingsTitle">Settings</summary>
+
+    <!-- connection -->
+    <section class="card">
+      <h2 data-t="hConn">Connection</h2>
+      <p class="muted" id="state"></p>
+      <p class="muted small" id="hubInfo" hidden></p>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="connect" data-t="connectHub">Connect to the hub</button>
+        <button id="disconnect" data-t="disconnect">Disconnect</button>
+      </div>
+      <details class="sub" id="directSub"><summary data-t="directT">Probe without a hub</summary>
+        <p class="muted small" data-t="directHelp"></p>
+        <button id="connectProbe" data-t="connectProbe">Connect to a probe</button>
+      </details>
+    </section>
+
+    <!-- the selected sensor, through the hub -->
+    <section class="card" id="remoteCard" hidden>
+      <h2 id="rTitle">–</h2>
+      <p class="muted small" data-t="remoteHelp"></p>
+      <div class="form">
+        <label><span data-t="logInt">Measure every (min)</span><input id="rLi" type="number" min="10" max="360" step="5"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="rSave" class="primary" data-t="save">Save</button></div>
+      <h3 data-t="calib">Calibration</h3>
+      <p class="muted small" data-t="rCalHelp"></p>
+      <div class="row">
+        <button id="rDry" data-t="rDry">Dry = last reading</button>
+        <button id="rWet" data-t="rWet">Wet = last reading</button>
+      </div>
+      <p class="note" id="rState"></p>
+      <details class="sub"><summary data-t="more">More</summary>
+        <div class="row" style="margin-top:8px">
+          <button id="rCancel" data-t="rCancel">Cancel waiting changes</button>
+          <button id="rClear" data-t="clearLog">Erase the probe's log</button>
+          <button id="rForget" data-t="rForget">Remove from the hub</button>
+        </div>
+      </details>
+    </section>
+
+    <!-- a probe connected directly (no hub) -->
+    <section class="card" id="directCard" hidden>
+      <h2 id="pTitle">–</h2>
+      <p class="muted small" id="pMode"></p>
+      <h3 data-t="calib">Calibration</h3>
+      <p class="muted small"><span data-t="calibHelp"></span>
+        <br><span data-t="calNow">Now</span>: <span data-t="dry">dry</span> <span id="cDry">–</span> V,
+        <span data-t="wet">wet</span> <span id="cWet">–</span> V, <span data-t="raw">raw</span> <span id="cRaw">–</span> V</p>
+      <div class="row">
+        <button id="bMeasure" data-t="measure">Measure now</button>
+        <button id="bDry" data-t="setDry">Set dry</button>
+        <button id="bWet" data-t="setWet">Set wet</button>
+      </div>
+      <h3 data-t="hMeasure">Measuring</h3>
+      <div class="form">
+        <label><span data-t="logInt">Measure every (min)</span><input id="fLi" type="number" min="10" max="360" step="5"></label>
+        <label><span data-t="reportEvery">Send to MQTT every (readings)</span><input id="fRe" type="number" min="1" max="48" step="1"></label>
+        <label><span data-t="svcTo">Service mode timeout (min)</span><input id="fSt" type="number" min="5" max="240" step="5"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="bCfg" data-t="save">Save</button></div>
+      <details class="sub"><summary data-t="diag">Diagnostics</summary>
+        <p class="muted small" style="margin:8px 0 4px"><span data-t="bootHist">Boot history (newest first)</span>:</p>
+        <div class="mono" id="bootHist">–</div>
+        <p class="muted small" style="margin:10px 0 0"><span data-t="probeLog">Probe memory</span>: <span id="logFill">–</span></p>
+      </details>
+      <details class="sub"><summary data-t="more">More</summary>
+        <div class="row" style="margin-top:8px">
+          <button id="bClear" data-t="clearLog">Erase the probe's log</button>
+          <button id="bOff" data-t="powerOff">Power off the probe</button>
+        </div>
+      </details>
+    </section>
+
+    <!-- WiFi / MQTT / web login of the connected hub or probe -->
+    <section class="card" id="netCard" hidden>
+      <h2 id="netTitle">WiFi / MQTT</h2>
+      <p class="muted small" id="netHelp"></p>
+      <p class="muted small"><span class="dot" id="dWifi"></span> WiFi &nbsp; <span class="dot" id="dMqtt"></span> MQTT</p>
+      <h3>WiFi</h3>
+      <div class="form">
+        <label><span data-t="ssid">Network name (SSID)</span><input id="fSsid" autocomplete="off"></label>
+        <label><span data-t="pass">Password</span><input id="fWpass" type="password" autocomplete="new-password"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="bWifi" data-t="saveRestart">Save and restart</button></div>
+      <h3 data-t="hMqtt">MQTT (Home Assistant)</h3>
+      <div class="form">
+        <label><span data-t="host">Broker (IP or name)</span><input id="fHost" autocomplete="off"></label>
+        <label><span data-t="port">Port</span><input id="fPort" type="number" min="1" max="65535"></label>
+        <label><span data-t="user">User</span><input id="fUser" autocomplete="off"></label>
+        <label><span data-t="pass">Password</span><input id="fMpass" type="password" autocomplete="new-password" data-tp="keepPass"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="bMqtt" data-t="saveRestart">Save and restart</button></div>
+      <h3 data-t="hWeb">Web page login</h3>
+      <div class="form">
+        <label><span data-t="user">User</span><input id="fWuser" autocomplete="off"></label>
+        <label><span data-t="pass">Password</span><input id="fWebpass" type="password" autocomplete="new-password"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="bWeb" data-t="saveRestart">Save and restart</button></div>
+    </section>
+
+    <!-- data in this phone, app -->
+    <section class="card">
+      <h2 data-t="hData">Data and app</h2>
+      <p class="muted small" id="backupInfo"></p>
+      <p class="note warn" id="persistNote" hidden data-t="persistNo"></p>
+      <div class="row" style="margin-top:8px">
+        <button id="bBackup" data-t="backupSave">Save backup</button>
+        <button id="bRestore" data-t="backupLoad">Restore from backup</button>
+        <button id="bCsv" data-t="csv">Export CSV</button>
+        <input id="fRestore" type="file" accept=".json,application/json" hidden>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="install" hidden data-t="install">Install app</button>
+        <button id="bForget" data-t="forget">Forget this sensor's history here</button>
+      </div>
+      <h3 data-t="hLang">Language</h3>
+      <div class="seg"><button data-lang="pl">Polski</button><button data-lang="en">English</button></div>
+    </section>
+    <footer data-t="footer"></footer>
+  </details>
+</main>
+</div>
+
+<script>
+const T = {
+  en: {
+    title: "Plant sensor", settingsTitle: "Settings",
+    emptyTxt: "Connect to the hub to see your sensors.", connectHub: "Connect to the hub", connectProbe: "Connect to a probe",
+    disconnect: "Disconnect", install: "Install app",
+    r24: "24 h", r7: "7 days", r30: "30 days", rall: "All", lgMoist: "Soil moisture %", lgBatt: "Battery V",
+    hConn: "Connection", directT: "Probe without a hub",
+    directHelp: "Only for a probe that does not see a hub (e.g. given to someone without one): press RST on the probe, then connect within 2 minutes.",
+    link: { off: "offline", busy: "connecting…", hub: (n) => n, probe: (n) => n, tap: "connect" },
+    calib: "Calibration", calibHelp: 'Dry soil: wait for a reading, then "Set dry". After watering: "Set wet".',
+    calNow: "Now", dry: "dry", wet: "wet", raw: "reading", measure: "Measure now", setDry: "Set dry", setWet: "Set wet", csv: "Export CSV",
+    hMeasure: "Measuring", logInt: "Measure every (min)", reportEvery: "Send to MQTT every (readings)", svcTo: "Service mode timeout (min)",
+    save: "Save", ssid: "Network name (SSID)", pass: "Password", saveRestart: "Save and restart",
+    hWeb: "Web page login", askWeb: "Save the web page login and restart?", needWeb: "Enter user and password.",
+    hMqtt: "MQTT (Home Assistant)", host: "Broker (IP or name)", port: "Port", user: "User", keepPass: "unchanged",
+    netHub: "Optional. Without WiFi the hub works offline (Bluetooth only). Changes restart the hub; readings are kept.",
+    netProbe: "Optional, not needed for phone-only use. Changes restart the probe.",
+    modePhone: "mode: phone only", modeNet: "mode: WiFi + MQTT and phone", svcOn: "service mode is ON",
+    diag: "Diagnostics", bootHist: "Boot history (newest first)", probeLog: "Probe memory",
+    logFillTxt: (n, c) => `${n} of ${c} readings (${Math.round(100 * n / Math.max(1, c))} %)`,
+    powerOff: "Power off the probe", askOff: "Power the probe off? It stops measuring until you press RST (it then starts in service mode).", offDone: "The probe is off. Press RST to start it.",
+    more: "More", forget: "Forget this sensor's history here", clearLog: "Erase the probe's log",
+    hData: "Data and app", hLang: "Language", backupSave: "Save backup", backupLoad: "Restore from backup",
+    backupNever: "The history lives in this phone. No backup yet – save one now and then (e.g. to Google Drive).",
+    backupLast: (d) => `The history lives in this phone. Last backup: ${d}.`, backupOld: (d) => `The history lives in this phone. Last backup: ${d} – time for a new one.`,
+    restored: (n) => `Restored: ${n} sensor(s).`, badBackup: "This is not a plant sensor backup file.",
+    persistNo: "The browser may delete this data when storage runs low – install the app and keep backups.",
+    footer: 'Works offline once opened. Chrome / Edge on Android, Windows, macOS, ChromeOS; iPhone: the free "Bluefy" browser. Each phone keeps its own history.',
+    notConnected: "Not connected", connecting: "Connecting…", downloading: "Downloading…", reconnecting: "Connection lost – reconnecting…",
+    connectedTo: (n, k) => `Connected to ${n} – ${k} new reading${k === 1 ? "" : "s"}`,
+    connectedHub: (n, k) => `Connected to the hub ${n} – ${k} new reading${k === 1 ? "" : "s"}`,
+    disconnectedShow: "Not connected – showing the history saved in this phone",
+    noBt: "This browser has no Web Bluetooth. Use Chrome on Android/PC, or Bluefy on iPhone.",
+    btErr: (m) => `Bluetooth: ${m}`,
+    oneReading: "Only one reading in this range", noReadings: "No readings in this range yet",
+    askDry: "Use the last reading as DRY?", askWet: "Use the last reading as WET?",
+    askForget: (n) => `Forget the saved history of ${n} in this phone?`,
+    askClear: "Erase the measurement log stored ON THE PROBE? (The copy in this phone stays.)",
+    askWifi: (s) => `Save WiFi "${s}" and restart?`, askMqtt: "Save MQTT settings and restart?",
+    saved_: "Saved", restarting: "Saved – restarting. Connect again in a minute.", needSsid: "Enter the WiFi network name.",
+    remoteHelp: "Saved in the hub; the probe takes it at its next reading.",
+    rCalHelp: "Put the probe in dry (or freshly watered) soil, wait for one reading, then press the button.",
+    label: "Name (e.g. plant)", rDry: "Dry = last reading", rWet: "Wet = last reading", rCancel: "Cancel waiting changes",
+    rForget: "Remove from the hub", askRForget: (n) => `Remove ${n} from the hub? Its readings stay; it re-appears at its next contact.`,
+    pendYes: "⏳ Waiting for the probe's next reading.", pendNo: "Up to date.", rSaved: "Saved in the hub – the probe takes it at its next reading.",
+    hubInfo: (s) => `${s.np} sensor${s.np === "1" ? "" : "s"} · ${s.n} readings in the hub · WiFi ${s.wc === "1" ? "connected" : "offline"}${s.mh ? " · MQTT " + (s.mc === "1" ? "connected" : "not connected") : ""}`,
+    seenAgo: (s) => s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`,
+    noContact: (a) => `no contact ${a}`, lowBatt: "charge", viaHub: "via the hub", direct: "directly",
+    noProbes: "No sensor has reported yet. Probes find the hub at their next reading (or press RST on a probe).",
+    askName: (n) => `Name for ${n} (e.g. the plant it is in). Empty = the probe's own name.`, renameT: "Rename",
+    sub: (n, when, how) => `${n} · ${when} · ${how}`, csvHead: "time_utc,local_time,soil_moisture_pct,battery_v"
+  },
+  pl: {
+    title: "Czujnik roślin", settingsTitle: "Ustawienia",
+    emptyTxt: "Połącz się z bazą, żeby zobaczyć czujniki.", connectHub: "Połącz z bazą", connectProbe: "Połącz z sondą",
+    disconnect: "Rozłącz", install: "Zainstaluj aplikację",
+    r24: "24 h", r7: "7 dni", r30: "30 dni", rall: "Wszystko", lgMoist: "Wilgotność gleby %", lgBatt: "Bateria V",
+    hConn: "Połączenie", directT: "Sonda bez bazy",
+    directHelp: "Tylko dla sondy, która nie widzi bazy (np. oddanej komuś bez bazy): naciśnij RST na sondzie i w ciągu 2 minut połącz się.",
+    link: { off: "offline", busy: "łączenie…", hub: (n) => n, probe: (n) => n, tap: "połącz" },
+    calib: "Kalibracja", calibHelp: 'Sucha gleba: poczekaj na pomiar i naciśnij „Ustaw sucho”. Po podlaniu: „Ustaw mokro”.',
+    calNow: "Teraz", dry: "sucho", wet: "mokro", raw: "odczyt", measure: "Zmierz teraz", setDry: "Ustaw sucho", setWet: "Ustaw mokro", csv: "Eksport CSV",
+    hMeasure: "Pomiary", logInt: "Pomiar co (min)", reportEvery: "Wysyłka do MQTT co (pomiarów)", svcTo: "Limit trybu serwisowego (min)",
+    save: "Zapisz", ssid: "Nazwa sieci (SSID)", pass: "Hasło", saveRestart: "Zapisz i zrestartuj",
+    hWeb: "Logowanie do strony www", askWeb: "Zapisać login strony www i zrestartować?", needWeb: "Wpisz użytkownika i hasło.",
+    hMqtt: "MQTT (Home Assistant)", host: "Broker (IP lub nazwa)", port: "Port", user: "Użytkownik", keepPass: "bez zmian",
+    netHub: "Opcjonalnie. Bez WiFi baza działa offline (tylko Bluetooth). Zmiana restartuje bazę; pomiary zostają.",
+    netProbe: "Opcjonalnie, niepotrzebne przy pracy tylko z telefonem. Zmiana restartuje sondę.",
+    modePhone: "tryb: tylko telefon", modeNet: "tryb: WiFi + MQTT i telefon", svcOn: "tryb serwisowy WŁĄCZONY",
+    diag: "Diagnostyka", bootHist: "Historia uruchomień (najnowsze pierwsze)", probeLog: "Pamięć sondy",
+    logFillTxt: (n, c) => `${n} z ${c} pomiarów (${Math.round(100 * n / Math.max(1, c))} %)`,
+    powerOff: "Wyłącz sondę", askOff: "Wyłączyć sondę? Przestanie mierzyć, aż naciśniesz RST (uruchomi się wtedy w trybie serwisowym).", offDone: "Sonda wyłączona. Naciśnij RST, aby ją włączyć.",
+    more: "Więcej", forget: "Usuń historię tego czujnika z telefonu", clearLog: "Wyczyść historię w sondzie",
+    hData: "Dane i aplikacja", hLang: "Język", backupSave: "Zapisz kopię", backupLoad: "Przywróć z kopii",
+    backupNever: "Historia jest zapisana w tym telefonie. Brak kopii – co jakiś czas zapisz kopię (np. na Dysk Google).",
+    backupLast: (d) => `Historia jest zapisana w tym telefonie. Ostatnia kopia: ${d}.`, backupOld: (d) => `Historia jest zapisana w tym telefonie. Ostatnia kopia: ${d} – czas na nową.`,
+    restored: (n) => `Przywrócono czujników: ${n}.`, badBackup: "To nie jest plik kopii czujnika roślin.",
+    persistNo: "Przeglądarka może usunąć te dane przy braku miejsca – zainstaluj aplikację i rób kopie.",
+    footer: "Po pierwszym otwarciu działa bez internetu. Chrome / Edge na Androidzie, Windows, macOS i ChromeOS; iPhone: darmowa przeglądarka „Bluefy”. Każdy telefon ma własną historię.",
+    notConnected: "Nie połączono", connecting: "Łączenie…", downloading: "Pobieranie…", reconnecting: "Utracono połączenie – łączę ponownie…",
+    connectedTo: (n, k) => `Połączono z ${n} – nowych pomiarów: ${k}`,
+    connectedHub: (n, k) => `Połączono z bazą ${n} – nowych pomiarów: ${k}`,
+    disconnectedShow: "Nie połączono – historia zapisana w telefonie",
+    noBt: "Ta przeglądarka nie obsługuje Web Bluetooth. Użyj Chrome na Androidzie/PC lub Bluefy na iPhonie.",
+    btErr: (m) => `Bluetooth: ${m}`,
+    oneReading: "Tylko jeden pomiar w tym zakresie", noReadings: "Brak pomiarów w tym zakresie",
+    askDry: "Użyć ostatniego odczytu jako SUCHO?", askWet: "Użyć ostatniego odczytu jako MOKRO?",
+    askForget: (n) => `Usunąć zapisaną historię ${n} z tego telefonu?`,
+    askClear: "Wyczyścić historię zapisaną W SONDZIE? (Kopia w telefonie zostaje.)",
+    askWifi: (s) => `Zapisać WiFi „${s}” i zrestartować?`, askMqtt: "Zapisać ustawienia MQTT i zrestartować?",
+    saved_: "Zapisano", restarting: "Zapisano – restart. Połącz się ponownie za minutę.", needSsid: "Wpisz nazwę sieci WiFi.",
+    remoteHelp: "Zapisywane w bazie; sonda odbierze to przy następnym pomiarze.",
+    rCalHelp: "Włóż sondę do suchej (albo świeżo podlanej) ziemi, poczekaj na jeden pomiar i naciśnij przycisk.",
+    label: "Nazwa (np. roślina)", rDry: "Sucho = ostatni odczyt", rWet: "Mokro = ostatni odczyt", rCancel: "Anuluj oczekujące zmiany",
+    rForget: "Usuń z bazy", askRForget: (n) => `Usunąć ${n} z bazy? Pomiary zostają; sonda wróci przy następnym kontakcie.`,
+    pendYes: "⏳ Czeka na następny pomiar sondy.", pendNo: "Aktualne.", rSaved: "Zapisano w bazie – sonda odbierze to przy następnym pomiarze.",
+    hubInfo: (s) => `czujników: ${s.np} · pomiarów w bazie: ${s.n} · WiFi ${s.wc === "1" ? "połączone" : "offline"}${s.mh ? " · MQTT " + (s.mc === "1" ? "połączone" : "niepołączone") : ""}`,
+    seenAgo: (s) => s < 90 ? "przed chwilą" : s < 5400 ? `${Math.round(s / 60)} min temu` : s < 172800 ? `${Math.round(s / 3600)} h temu` : `${Math.round(s / 86400)} dni temu`,
+    noContact: (a) => `brak kontaktu ${a}`, lowBatt: "naładuj", viaHub: "przez bazę", direct: "bezpośrednio",
+    noProbes: "Żaden czujnik jeszcze się nie zgłosił. Sondy znajdą bazę przy następnym pomiarze (albo naciśnij RST na sondzie).",
+    askName: (n) => `Nazwa dla ${n} (np. roślina, w której jest). Puste = nazwa sondy.`, renameT: "Zmień nazwę",
+    sub: (n, when, how) => `${n} · ${when} · ${how}`, csvHead: "czas_utc,czas_lokalny,wilgotnosc_gleby_proc,bateria_v"
+  }
+};
+let lang = (() => { try { return localStorage.getItem("ps-lang") || ((navigator.language || "").toLowerCase().startsWith("pl") ? "pl" : "en"); } catch { return "pl"; } })();
+const t = (k, ...a) => { const v = (T[lang] && T[lang][k]) ?? T.en[k]; return typeof v === "function" ? v(...a) : v; };
+const tl = (k, ...a) => { const v = T[lang].link[k]; return typeof v === "function" ? v(...a) : v; };
+
+const SVC = "7c1e0001-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const CH_STATUS = "7c1e0002-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const CH_CMD = "7c1e0003-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const CH_DATA = "7c1e0004-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const HUB_SVC = "7c1e1001-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const HUB_STATUS = "7c1e1002-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const HUB_CMD = "7c1e1003-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const HUB_DATA = "7c1e1004-6b3a-4b8e-9d6a-1f2e3d4c5b6a";
+const US = "\x1f";
+const BACKUP_DAYS = 30, LOW_BATT = 3.05, POLL_S = 60;
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder(), dec = new TextDecoder();
+let dev = null, chStatus = null, chCmd = null, chData = null, status = {}, current = null, rangeH = 168;
+let mode = "none";          // "hub" | "probe" | "none" (not connected)
+let hubProbes = [];         // probe info from the hub
+let linkBusy = false, userClosed = false, retryN = 0, retryTimer = null, pollTimer = null;
+let persisted = true;
+
+// ------------------------------------------------------------------ storage: IndexedDB (+ old localStorage import)
+const DB = {
+  db: null, probes: new Map(), meta: {},
+  open() {
+    return new Promise((res) => {
+      if (!window.indexedDB) return res(false);
+      const rq = indexedDB.open("plant-sensor", 1);
+      rq.onupgradeneeded = () => { const d = rq.result; d.createObjectStore("probes", { keyPath: "name" }); d.createObjectStore("meta"); };
+      rq.onsuccess = () => { this.db = rq.result; res(true); };
+      rq.onerror = () => res(false);
+    });
+  },
+  tx(store, m, fn) {
+    return new Promise((res, rej) => { const tx = this.db.transaction(store, m); const r = fn(tx.objectStore(store)); tx.oncomplete = () => res(r && r.result); tx.onerror = () => rej(tx.error); });
+  },
+  async init() {
+    const ok = await this.open();
+    if (ok) {
+      const all = await this.tx("probes", "readonly", (s) => s.getAll());
+      (all || []).forEach((p) => this.probes.set(p.name, p));
+      this.meta = (await this.tx("meta", "readonly", (s) => s.get("meta"))) || {};
+    }
+    try {   // data of the very first page version (localStorage "ps:<name>"), once
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i); if (!k.startsWith("ps:")) continue;
+        const name = k.slice(3), old = JSON.parse(localStorage.getItem(k)) || { recs: [] };
+        const p = this.get(name); if (merge(p.recs, old.recs || [])) { p.last = p.last || old.last; await this.put(p); }
+      }
+    } catch {}
+  },
+  get(name) { if (!this.probes.has(name)) this.probes.set(name, { name, recs: [], last: null, sync: 0 }); return this.probes.get(name); },
+  names() { return [...this.probes.keys()].filter((n) => this.probes.get(n).recs.length || this.probes.get(n).sync); },
+  async put(p) { this.probes.set(p.name, p); if (this.db) await this.tx("probes", "readwrite", (s) => s.put(p)); else try { localStorage.setItem("ps:" + p.name, JSON.stringify(p)); } catch {} },
+  async del(name) { this.probes.delete(name); if (this.db) await this.tx("probes", "readwrite", (s) => s.delete(name)); try { localStorage.removeItem("ps:" + name); } catch {} },
+  async setMeta(k, v) { this.meta[k] = v; if (this.db) await this.tx("meta", "readwrite", (s) => s.put(this.meta, "meta")); }
+};
+function merge(recs, add) {   // add records not there yet (by time), keep sorted; returns how many were added
+  const have = new Set(recs.map((r) => r.t)); let n = 0;
+  add.forEach((r) => { if (r.t && !have.has(r.t)) { recs.push({ t: r.t, m: r.m, v: r.v }); have.add(r.t); n++; } });
+  if (n) recs.sort((a, b) => a.t - b.t);
+  return n;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const connected = () => !!(dev && dev.gatt && dev.gatt.connected && mode !== "none");
+const days = (ms) => (Date.now() - ms) / 86400000;
+const fmtDate = (ms) => new Date(ms).toLocaleDateString(lang, { day: "numeric", month: "short", year: "numeric" });
+const shortName = (n) => n.replace(/^plant-sensor-/, "");
+const display = (p) => p.label || shortName(p.name);
+function setState(s) { $("state").textContent = s; }
+function setErr(s) { $("error").hidden = !s; $("error").textContent = s || ""; }
+function setProgress(f) { $("progress").style.width = f >= 1 || f <= 0 ? "0" : Math.round(f * 100) + "%"; }
+
+// one Bluetooth operation at a time (Chrome refuses overlapping GATT calls)
+let chain = Promise.resolve();
+const locked = (fn) => (chain = chain.then(fn, fn));
+
+// ------------------------------------------------------------------ Bluetooth basics
+async function cmd(text) { await chCmd.writeValueWithResponse(enc.encode(text)); await sleep(60); }
+function parseKV(v) { const s = {}; v.split(";").forEach((kv) => { const i = kv.indexOf("="); if (i > 0) s[kv.slice(0, i)] = kv.slice(i + 1); }); return s; }
+async function readStatus() { status = parseKV(dec.decode(await chStatus.readValue())); return status; }
+async function readText() { return dec.decode(await chData.readValue()); }
+
+// ------------------------------------------------------------------ hub
+async function hubProbeList() {
+  const list = [];
+  for (let i = 0; i < 24 && list.length < (+status.np || 0); i++) {
+    await cmd("P" + i);
+    const s = parseKV(await readText());
+    if (+s.i >= 0 && s.name) list.push(s);
+  }
+  hubProbes = list;
+}
+async function hubDownload() {
+  const key = "hub:" + status.name, last = DB.meta[key] || 0, newest = +status.ser || 0;
+  let from = Math.max(last + 1, +status.old || 0), got = 0;
+  const byIdx = {}; hubProbes.forEach((p) => (byIdx[+p.i] = p));
+  const add = {}, total = Math.max(1, newest - from + 1);
+  while (from <= newest) {
+    await cmd("R" + from);
+    const dv = await chData.readValue(), n = dv.getUint8(8);
+    if (!n) break;
+    let lastSer = from;
+    for (let i = 0; i < n; i++) {
+      const o = 9 + i * 16;
+      const r = { t: dv.getUint32(o, true), ser: dv.getUint32(o + 4, true), m: dv.getUint16(o + 8, true) / 10, v: dv.getUint16(o + 10, true) / 1000, probe: dv.getUint8(o + 14) };
+      lastSer = r.ser;
+      const p = byIdx[r.probe]; if (!p || !r.t) continue;
+      (add[p.name] = add[p.name] || []).push(r);
+    }
+    from = lastSer + 1;
+    setProgress(1 - (newest - lastSer) / total);
+  }
+  for (const p of hubProbes) {
+    const q = DB.get(p.name);
+    if (add[p.name]) got += merge(q.recs, add[p.name]);
+    const seen = +p.seen ? +p.seen * 1000 : Date.now() - (+p.ago || 0) * 1000;
+    q.last = { m: +p.m, v: +p.vb, at: seen };
+    q.sync = Date.now(); q.fw = p.fw; q.li = +p.li || q.li; if (!q.labelDirty) q.label = p.label || ""; q.hub = status.name;
+    await DB.put(q);
+  }
+  await DB.setMeta(key, newest);
+  setProgress(1);
+  return got;
+}
+async function hubSync() {   // status + probe list + new readings
+  await readStatus(); await hubProbeList();
+  let pushed = false;                    // names given in this phone while not connected -> hub
+  for (const h of hubProbes) {
+    const q = DB.get(h.name);
+    if (q.labelDirty) { await cmd(["S", h.i, "", "", "", "", "", q.label || ""].join(US)); q.labelDirty = false; await DB.put(q); pushed = true; }
+  }
+  if (pushed) { await sleep(150); await hubProbeList(); }
+  return hubDownload();
+}
+async function rename() {
+  if (!current) return;
+  const q = DB.get(current);
+  let n = prompt(t("askName", q.name), q.label || "");
+  if (n === null) return;
+  n = n.replace(/["\\]/g, "").trim().slice(0, 19);
+  q.label = n;
+  const h = mode === "hub" && connected() && hubP();
+  q.labelDirty = !h && !!q.hub;          // known to a hub, but not connected now: send at the next connection
+  await DB.put(q);
+  if (h) await locked(async () => { await cmd(["S", h.i, "", "", "", "", "", n].join(US)); await sleep(150); await hubProbeList(); });
+  render();
+}
+const hubP = () => hubProbes.find((x) => x.name === current);
+async function remoteSet(dry, wet) {
+  const p = hubP(); if (!p) return;
+  const keep = (v, cur) => (v === "" || +v === +cur) ? "" : String(v);
+  const f = ["S", p.i, keep($("rLi").value, p.li), "", "", dry || "", wet || "", DB.get(p.name).label || ""];
+  await locked(async () => { await cmd(f.join(US)); await sleep(200); await hubSync(); });
+  render(); setState(t("rSaved"));
+}
+
+// ------------------------------------------------------------------ probe connected directly
+async function readChunk(start) {
+  await cmd("R" + start);
+  const dv = await chData.readValue(), n = dv.getUint8(8), recs = [];
+  for (let i = 0; i < n; i++) { const o = 9 + i * 8; recs.push({ t: dv.getUint32(o, true), m: dv.getUint16(o + 4, true) / 10, v: dv.getUint16(o + 6, true) / 1000 }); }
+  return recs;
+}
+// readings without a clock (stored before the probe got the time) get a time estimated from a neighbour
+function fillTimes(recs, liMin) {
+  const step = (liMin || 60) * 60;
+  recs.forEach((r) => { if (r.t < 1700000000) r.t = 0; });
+  for (let i = recs.length - 2; i >= 0; i--) if (!recs[i].t && recs[i + 1].t) recs[i].t = recs[i + 1].t - step;
+  for (let i = 1; i < recs.length; i++) if (!recs[i].t && recs[i - 1].t) recs[i].t = recs[i - 1].t + step;
+  return recs.filter((r) => r.t);
+}
+async function probeDownload() {
+  const p = DB.get(status.name), lastT = p.recs.length ? p.recs[p.recs.length - 1].t : 0, total = +status.n || 0;
+  let got = [], start = total;
+  while (start > 0) {                                  // newest first, stop at what we already have
+    const end = start; start = Math.max(0, start - 60);
+    const recs = (await readChunk(start)).slice(0, end - start);
+    got = recs.concat(got);
+    setProgress((total - start) / Math.max(1, total));
+    if (lastT && recs.length && recs[0].t && recs[0].t <= lastT) break;
+  }
+  const n = merge(p.recs, fillTimes(got, +status.li).filter((r) => r.t > lastT));
+  p.last = { m: +status.m, v: +status.vb, at: Date.now() };
+  p.sync = Date.now(); p.fw = status.fw || ""; p.li = +status.li || 60;
+  await DB.put(p);
+  setProgress(1);
+  return n;
+}
+
+// ------------------------------------------------------------------ connect / reconnect
+async function pick(hub) {
+  setErr("");
+  if (!navigator.bluetooth) { setErr(t("noBt")); return; }
+  try {
+    const d = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: hub ? "plant-hub" : "plant-sensor" }], optionalServices: [SVC, HUB_SVC] });
+    await open(d);
+  } catch (e) { if (!(e && e.name === "NotFoundError")) setErr(t("btErr", e && e.message ? e.message : e)); }
+}
+async function open(d) {
+  if (dev && dev !== d && dev.gatt.connected) { userClosed = true; dev.gatt.disconnect(); }
+  dev = d; userClosed = false; clearTimeout(retryTimer);
+  if (!d._ps) { d._ps = true; d.addEventListener("gattserverdisconnected", () => onDisconnected(d)); }
+  linkBusy = true; linkView(); setState(t("connecting")); setProgress(0.02);
+  try {
+    let server = null;
+    for (let i = 0; i < 3 && !server; i++) { try { server = await d.gatt.connect(); } catch (e) { if (i === 2) throw e; await sleep(800); } }
+    const hub = (d.name || "").startsWith("plant-hub");
+    const svc = await server.getPrimaryService(hub ? HUB_SVC : SVC);
+    chStatus = await svc.getCharacteristic(hub ? HUB_STATUS : CH_STATUS);
+    chCmd = await svc.getCharacteristic(hub ? HUB_CMD : CH_CMD);
+    chData = await svc.getCharacteristic(hub ? HUB_DATA : CH_DATA);
+    mode = hub ? "hub" : "probe";
+    let n = 0;
+    await locked(async () => {
+      await cmd("T" + Math.floor(Date.now() / 1000));   // give the hub / probe the time
+      await sleep(300);
+      if (hub) n = await hubSync();
+      else { await readStatus(); n = await probeDownload(); }
+    });
+    if (hub) {
+      await DB.setMeta("lastHub", { id: d.id, name: d.name });
+      if (!current || !hubProbes.some((p) => p.name === current)) current = hubProbes.length ? hubProbes[0].name : current;
+      setState(t("connectedHub", status.name, n));
+      startPoll();
+    } else {
+      current = status.name || d.name;
+      setState(t("connectedTo", current, n));
+    }
+    retryN = 0; linkBusy = false; fillNet(); render(); askPersist();
+  } catch (e) {
+    linkBusy = false; mode = "none";
+    if (d.gatt.connected) { userClosed = true; d.gatt.disconnect(); }
+    setState(t("notConnected")); setProgress(1);
+    if (hubDevice(d) && !userClosed) scheduleRetry(d); else setErr(t("btErr", e && e.message ? e.message : e));
+    render();
+  }
+}
+const hubDevice = (d) => d && (d.name || "").startsWith("plant-hub");
+function onDisconnected(d) {
+  if (d !== dev) return;
+  const was = mode; mode = "none"; stopPoll(); linkBusy = false;
+  setState(t("disconnectedShow")); render();
+  if (was === "hub" && !userClosed) scheduleRetry(d);   // the hub is always on: come back by ourselves
+}
+function scheduleRetry(d) {
+  clearTimeout(retryTimer);
+  const wait = [2, 5, 10, 20, 30][Math.min(retryN, 4)] * 1000; retryN++;
+  setState(t("reconnecting")); linkBusy = true; linkView();
+  retryTimer = setTimeout(() => { if (document.visibilityState === "visible") open(d); else linkBusy = false, linkView(); }, wait);
+}
+// at start: reconnect to the hub used last time, without a device picker (Chrome remembers the permission)
+async function autoConnect() {
+  const last = DB.meta.lastHub;
+  if (!last || !navigator.bluetooth || !navigator.bluetooth.getDevices) return;
+  try {
+    const list = await navigator.bluetooth.getDevices();
+    const d = list.find((x) => x.id === last.id) || list.find(hubDevice);
+    if (!d) return;
+    try { await open(d); if (connected()) return; } catch {}
+    if (d.watchAdvertisements) {           // not in range yet / radio asleep: connect when it is heard
+      const ac = new AbortController();
+      d.addEventListener("advertisementreceived", () => { ac.abort(); if (!connected()) open(d); }, { once: true });
+      await d.watchAdvertisements({ signal: ac.signal }).catch(() => {});
+    }
+  } catch {}
+}
+function startPoll() { stopPoll(); pollTimer = setInterval(poll, POLL_S * 1000); }
+function stopPoll() { clearInterval(pollTimer); pollTimer = null; }
+async function poll() {
+  if (mode !== "hub" || !connected() || document.visibilityState !== "visible") return;
+  try { await locked(hubSync); render(); } catch {}
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (connected()) poll();
+  else if (dev && hubDevice(dev) && !userClosed && !linkBusy) open(dev);
+});
+async function askPersist() {
+  try { if (navigator.storage && navigator.storage.persist) persisted = (await navigator.storage.persisted()) || (await navigator.storage.persist()); } catch {}
+  dataView();
+}
+
+// ------------------------------------------------------------------ view
+function linkView() {
+  let dot = "", txt;
+  if (connected()) { dot = "ok"; txt = mode === "hub" ? tl("hub", status.name || dev.name) : tl("probe", shortName(status.name || dev.name)); }
+  else if (linkBusy) { dot = "busy"; txt = tl("busy"); }
+  else { txt = DB.meta.lastHub ? tl("tap") : tl("off"); }
+  $("linkDot").className = "dot " + dot; $("linkTxt").textContent = txt;
+  $("connect").hidden = connected(); $("disconnect").hidden = !connected() && !linkBusy;
+}
+function tileList() {
+  const names = DB.names();
+  hubProbes.forEach((h) => { if (!names.includes(h.name)) names.push(h.name); });
+  return names.map((n) => DB.get(n)).sort((a, b) => display(a).localeCompare(display(b), lang));
+}
+function ageOf(p) {   // seconds since the last reading of this sensor
+  const h = mode === "hub" && hubProbes.find((x) => x.name === p.name);
+  if (h) return +h.ago || 0;
+  const lt = p.recs.length ? p.recs[p.recs.length - 1].t * 1000 : p.last && p.last.at;
+  return lt ? (Date.now() - lt) / 1000 : null;
+}
+function render() {
+  linkView();
+  const list = tileList();
+  if (current && !list.some((p) => p.name === current)) current = null;
+  if (!current && list.length) current = list[0].name;
+  $("empty").hidden = list.length > 0;
+  if (!list.length && mode === "hub") $("empty").querySelector("p").textContent = t("noProbes");
+  else $("empty").querySelector("p").textContent = t("emptyTxt");
+  $("emptyConnect").hidden = connected();
+  const box = $("tiles"); box.innerHTML = "";
+  list.forEach((p) => {
+    const b = document.createElement("button"); b.className = "tile" + (p.name === current ? " on" : "");
+    const m = p.last && p.last.m != null && !isNaN(p.last.m) ? Math.round(p.last.m) : null, v = p.last && p.last.v;
+    const age = ageOf(p), li = (p.li || 60) * 60, h = hubProbes.find((x) => x.name === p.name);
+    const late = age != null && age > Math.max(3 * 3600, 3 * li), low = v && v < LOW_BATT;
+    b.innerHTML = `<span class="nm"></span><span class="val">${m == null ? "–" : m}<small>%</small></span>
+      <span class="meter"><i style="width:${m == null ? 0 : Math.max(2, Math.min(100, m))}%"></i></span><span class="sub"></span>`;
+    b.querySelector(".nm").textContent = display(p) + (h && +h.pend ? " ⏳" : "");
+    const sub = b.querySelector(".sub");
+    if (late) { sub.textContent = t("noContact", t("seenAgo", age)); sub.classList.add("warn"); }
+    else { sub.textContent = (v ? v.toFixed(2) + " V" + (low ? " – " + t("lowBatt") : "") : "–") + (age != null ? " · " + t("seenAgo", age) : ""); if (low) sub.classList.add("warn"); }
+    b.onclick = () => { current = p.name; render(); };
+    box.append(b);
+  });
+  detailView(); remoteView(); directView(); netView(); dataView();
+}
+function detailView() {
+  $("detail").hidden = !current;
+  if (!current) return;
+  const p = DB.get(current), age = ageOf(p);
+  $("dName").textContent = display(p);
+  const how = p.hub ? t("viaHub") : t("direct");
+  $("dSub").textContent = t("sub", p.name, age != null ? t("seenAgo", age) : "–", how) + (p.fw ? " · fw " + p.fw : "");
+  draw();
+}
+function remoteView() {
+  const p = mode === "hub" && connected() && hubP();
+  $("remoteCard").hidden = !p;
+  if (!p) return;
+  $("rTitle").textContent = display(DB.get(p.name));
+  if (document.activeElement !== $("rLi")) $("rLi").value = +p.pend && +p.pli ? p.pli : p.li;
+  const pd = +p.pend && +p.pdry ? p.pdry : p.dry, pw = +p.pend && +p.pwet ? p.pwet : p.wet;
+  $("rState").textContent = (+p.pend ? t("pendYes") : t("pendNo")) + ` ${t("dry")} ${pd} V · ${t("wet")} ${pw} V · ${t("raw")} ${p.raw} V`;
+}
+function directView() {
+  const on = mode === "probe" && connected();
+  $("directCard").hidden = !on;
+  $("directSub").hidden = mode === "hub" && connected();
+  if (!on) return;
+  $("pTitle").textContent = display(DB.get(status.name));
+  $("pMode").textContent = (status.mh ? t("modeNet") : t("modePhone")) + (status.svc === "1" ? " · " + t("svcOn") : "") + (status.fw ? " · fw " + status.fw : "");
+  $("cDry").textContent = status.dry || "–"; $("cWet").textContent = status.wet || "–"; $("cRaw").textContent = status.raw || "–";
+  $("bootHist").textContent = status.bh || "–";
+  $("logFill").textContent = status.cap ? t("logFillTxt", +status.n, +status.cap) : "–";
+}
+function fillNet() {
+  if (mode === "probe") { $("fLi").value = status.li || ""; $("fRe").value = status.re || ""; $("fSt").value = status.st || ""; }
+  $("fHost").value = status.mh || ""; $("fPort").value = status.mp || 1883; $("fUser").value = status.mu || "";
+  $("fMpass").value = ""; $("fWpass").value = ""; $("fWebpass").value = ""; $("fWuser").value = status.wu || "";
+}
+function netView() {
+  const on = connected();
+  $("netCard").hidden = !on;
+  $("hubInfo").hidden = !(on && mode === "hub");
+  if (!on) return;
+  if (mode === "hub") $("hubInfo").textContent = t("hubInfo", status);
+  $("netTitle").textContent = "WiFi / MQTT – " + (mode === "hub" ? status.name : shortName(status.name || ""));
+  $("netHelp").textContent = mode === "hub" ? t("netHub") : t("netProbe");
+  $("dWifi").className = "dot " + (status.wc === "1" ? "ok" : status.mh || status.ssid ? "bad" : "");
+  $("dMqtt").className = "dot " + (status.mc === "1" ? "ok" : status.mh ? "bad" : "");
+}
+function dataView() {
+  const lb = DB.meta.backup || 0;
+  $("backupInfo").textContent = !lb ? t("backupNever") : days(lb) > BACKUP_DAYS ? t("backupOld", fmtDate(lb)) : t("backupLast", fmtDate(lb));
+  $("persistNote").hidden = persisted || !DB.names().length;
+  $("bForget").disabled = !current; $("bCsv").disabled = !current;
+}
+function fmtTime(ts) { const d = new Date(ts * 1000); return d.toLocaleDateString(lang, { day: "numeric", month: "short" }) + " " + d.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }); }
+
+function draw() {
+  const cv = $("chart"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  cv.width = W * dpr; cv.height = H * dpr; const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+  const css = getComputedStyle(document.documentElement), col = (n) => css.getPropertyValue(n).trim();
+  const all = current ? DB.get(current).recs : [];
+  const now = Date.now() / 1000, from = rangeH ? now - rangeH * 3600 : (all.length ? all[0].t : now - 86400);
+  const recs = all.filter((r) => r.t >= from);
+  const L = 36, R = 34, Tp = 8, B = 24, pw = W - L - R, ph = H - Tp - B;
+  g.font = "11px system-ui, sans-serif"; g.fillStyle = col("--muted"); g.strokeStyle = col("--line"); g.lineWidth = 1;
+  for (let p = 0; p <= 100; p += 25) { const y = Tp + ph - (p / 100) * ph; g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.textAlign = "right"; g.fillText(p + "%", L - 6, y + 4); }
+  const vmin = 2.8, vmax = 3.6;
+  g.textAlign = "left"; for (let v = vmin; v <= vmax + 1e-6; v += 0.4) g.fillText(v.toFixed(1), L + pw + 6, Tp + ph - ((v - vmin) / (vmax - vmin)) * ph + 4);
+  if (recs.length < 2) { g.textAlign = "center"; g.fillText(recs.length ? t("oneReading") : t("noReadings"), L + pw / 2, Tp + ph / 2); return; }
+  const t0 = rangeH ? from : recs[0].t, t1 = now, X = (ts) => L + ((ts - t0) / (t1 - t0)) * pw;
+  const ticks = W < 520 ? 3 : 5;
+  for (let i = 0; i <= ticks; i++) { const ts = t0 + (i / ticks) * (t1 - t0), d = new Date(ts * 1000);
+    const lab = (t1 - t0) <= 2 * 86400 ? d.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : d.toLocaleDateString(lang, { day: "numeric", month: "short" });
+    g.textAlign = i === 0 ? "left" : i === ticks ? "right" : "center"; g.fillText(lab, X(ts), H - 6); }
+  const gap = 3 * 60 * (DB.get(current).li || 60);
+  const line = (key, color, w, y) => { g.strokeStyle = color; g.lineWidth = w; g.lineJoin = "round"; g.beginPath(); let prev = null;
+    recs.forEach((r) => { const x = X(r.t), yy = y(r[key]); if (prev === null || r.t - prev > gap) g.moveTo(x, yy); else g.lineTo(x, yy); prev = r.t; }); g.stroke(); };
+  line("v", col("--batt"), 1.5, (v) => Tp + ph - ((Math.min(vmax, Math.max(vmin, v)) - vmin) / (vmax - vmin)) * ph);
+  line("m", col("--moist"), 2.5, (m) => Tp + ph - (m / 100) * ph);
+}
+
+// ------------------------------------------------------------------ files: CSV, backup, restore
+async function saveFile(name, text, type) {
+  const file = new File([text], name, { type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return true; } catch (e) { if (e && e.name === "AbortError") return false; }
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return true;
+}
+function exportCsv() {
+  if (!current) return; const p = DB.get(current);
+  const rows = [t("csvHead") || "time_utc,local_time,soil_moisture_pct,battery_v"].concat(p.recs.map((r) => `${new Date(r.t * 1000).toISOString()},${new Date(r.t * 1000).toLocaleString(lang).replace(/,/g, "")},${r.m.toFixed(1)},${r.v.toFixed(3)}`));
+  saveFile(`${display(p)}.csv`, rows.join("\n"), "text/csv");
+}
+async function backup() {
+  const data = { app: "plant-sensor", version: 1, saved: new Date().toISOString(), probes: DB.names().map((n) => DB.get(n)) };
+  if (await saveFile(`plant-sensor-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data), "application/json")) { await DB.setMeta("backup", Date.now()); dataView(); }
+}
+async function restore(file) {
+  setErr("");
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.app !== "plant-sensor" || !Array.isArray(data.probes)) throw new Error("format");
+    for (const q of data.probes) {
+      if (!q || !q.name || !Array.isArray(q.recs)) continue;
+      const p = DB.get(q.name); merge(p.recs, q.recs);
+      p.last = p.last || q.last || null; p.sync = Math.max(p.sync || 0, q.sync || 0); p.fw = p.fw || q.fw; p.li = p.li || q.li; p.label = p.label || q.label;
+      await DB.put(p);
+    }
+    setState(t("restored", data.probes.length)); render();
+  } catch { setErr(t("badBackup")); }
+}
+async function probeCmd(text, wait) {   // direct probe: command, then fresh status
+  await locked(async () => { await cmd(text); await sleep(wait || 400); await readStatus(); });
+  fillNet(); render();
+}
+
+// ------------------------------------------------------------------ buttons
+$("pill").onclick = () => { if (connected() || linkBusy) { $("settings").open = true; $("settings").scrollIntoView({ behavior: "smooth" }); } else pick(true); };
+$("emptyConnect").onclick = () => pick(true);
+$("connect").onclick = () => pick(true);
+$("connectProbe").onclick = () => pick(false);
+$("disconnect").onclick = () => { userClosed = true; clearTimeout(retryTimer); stopPoll(); if (dev && dev.gatt.connected) dev.gatt.disconnect(); if (dev) onDisconnected(dev); };
+$("bMeasure").onclick = () => probeCmd("M", 700);
+$("bDry").onclick = () => { if (confirm(t("askDry"))) probeCmd("D"); };
+$("bWet").onclick = () => { if (confirm(t("askWet"))) probeCmd("W"); };
+$("bCfg").onclick = async () => { await probeCmd(["CFG", $("fLi").value || status.li, $("fRe").value || status.re, $("fSt").value || status.st].join(US)); setState(t("saved_")); };
+$("bClear").onclick = () => { if (confirm(t("askClear"))) probeCmd("CLEARLOG", 1800); };
+$("bOff").onclick = async () => { if (!confirm(t("askOff"))) return; await locked(() => cmd("OFF")); setState(t("offDone")); };
+$("bWifi").onclick = async () => {
+  const ssid = $("fSsid").value.trim(); if (!ssid) { setErr(t("needSsid")); return; } setErr("");
+  if (!confirm(t("askWifi", ssid))) return;
+  await locked(() => cmd(["WIFI", ssid, $("fWpass").value].join(US))); setState(t("restarting"));
+};
+$("bMqtt").onclick = async () => {
+  if (!confirm(t("askMqtt"))) return;
+  const pw = $("fMpass").value === "" ? "<keep>" : $("fMpass").value;
+  await locked(() => cmd(["MQTT", $("fHost").value.trim(), $("fPort").value || 1883, $("fUser").value.trim(), pw].join(US))); setState(t("restarting"));
+};
+$("bWeb").onclick = async () => {
+  const u = $("fWuser").value.trim(), pw = $("fWebpass").value; if (!u || !pw) { setErr(t("needWeb")); return; } setErr("");
+  if (!confirm(t("askWeb"))) return;
+  await locked(() => cmd(["WEB", u, pw].join(US))); setState(t("restarting"));
+};
+$("rSave").onclick = () => remoteSet("", "");
+$("dRename").onclick = rename;
+$("rDry").onclick = () => { if (confirm(t("askDry"))) remoteSet("raw", ""); };
+$("rWet").onclick = () => { if (confirm(t("askWet"))) remoteSet("", "raw"); };
+const hubCmd = async (parts, ask) => { const p = hubP(); if (!p || (ask && !confirm(ask))) return; await locked(async () => { await cmd(parts(p).join(US)); await sleep(200); await hubSync(); }); render(); };
+$("rCancel").onclick = () => hubCmd((p) => ["N", p.i]);
+$("rClear").onclick = () => hubCmd((p) => ["C", p.i, "CLEAR"], t("askClear"));
+$("rForget").onclick = () => { const p = hubP(); if (p) hubCmd((q) => ["X", q.i], t("askRForget", display(DB.get(p.name)))); };
+$("bCsv").onclick = exportCsv;
+$("bForget").onclick = async () => { if (current && confirm(t("askForget", display(DB.get(current))))) { await DB.del(current); current = null; render(); } };
+$("bBackup").onclick = backup;
+$("bRestore").onclick = () => $("fRestore").click();
+$("fRestore").onchange = (e) => { const f = e.target.files[0]; if (f) restore(f); e.target.value = ""; };
+document.querySelectorAll("#ranges button").forEach((b) => (b.onclick = () => {
+  document.querySelectorAll("#ranges button").forEach((x) => x.classList.remove("on")); b.classList.add("on"); rangeH = +b.dataset.h; draw(); }));
+document.querySelectorAll("[data-lang]").forEach((b) => (b.onclick = () => { lang = b.dataset.lang; try { localStorage.setItem("ps-lang", lang); } catch {} applyLang(); }));
+window.addEventListener("resize", draw);
+
+let installEvt = null;   // install as an app (Android / desktop Chrome)
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; $("install").hidden = false; });
+$("install").onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("install").hidden = true; };
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  document.querySelectorAll("[data-t]").forEach((el) => (el.textContent = t(el.dataset.t)));
+  document.querySelectorAll("[data-tp]").forEach((el) => (el.placeholder = t(el.dataset.tp)));
+  document.querySelectorAll("[data-lang]").forEach((b) => b.classList.toggle("on", b.dataset.lang === lang));
+  $("dRename").title = $("dRename").ariaLabel = t("renameT");
+  if (!connected() && !linkBusy) setState(DB.names().length ? t("disconnectedShow") : t("notConnected"));
+  render();
+}
+(async () => {
+  await DB.init();
+  try { if (navigator.storage && navigator.storage.persisted) persisted = await navigator.storage.persisted(); } catch {}
+  applyLang();
+  autoConnect();
+})();
+</script>
+</body>
+</html>

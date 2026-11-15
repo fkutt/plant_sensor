@@ -1,0 +1,12 @@
+# Pin map: v3 board with a Waveshare ESP32-C3-Zero (JP1/JP3/JP4 on pads 2-3 "Z", JP2 NOT fitted, status LED = LED2).
+# Choose the board in the top-level file (packages: board: !include ...).
+substitutions:
+  pin_moist: GPIO0
+  pin_vbat: GPIO1
+  pin_probe: GPIO7
+  pin_div: GPIO2
+  pin_led: GPIO5
+  pin_sens: GPIO8
+  pin_sda: GPIO3
+  pin_scl: GPIO4
+  board_name: "v3 C3-Zero"

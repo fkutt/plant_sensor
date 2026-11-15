@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "plant_sensor")(type "KiCad")(uri "${KIPRJMOD}/plant_sensor.pretty")(options "")(descr "Project footprints: ESP32-C3-MINI-1 (Espressif), probe electrodes"))
+)

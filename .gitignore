@@ -1,0 +1,10 @@
+# ESPHome: hasła i pliki kompilacji (nie wrzucać do repozytorium)
+secrets.yaml
+.esphome/
+.venv/
+__pycache__/
+# KiCad: kopie zapasowe i pliki robocze
+*-backups/
+*.kicad_prl
+fp-info-cache
+*.lck

@@ -76,7 +76,7 @@ Komputer z Chrome lub Edge (Windows, macOS) też działa, jeśli ma Bluetooth.
 **Wygląd aplikacji**
 
 - **Kafelki czujników** – nazwa, wilgotność w % z paskiem, napięcie baterii i kiedy był ostatni pomiar. Czerwony napis oznacza „naładuj” (bateria poniżej 3,05 V) albo „brak kontaktu” (sonda dawno się nie odezwała). Dotknięcie kafelka wybiera czujnik.
-- **Wykres** wybranego czujnika – wilgotność (niebieska linia) i bateria (pomarańczowa) za 24 h, 7 dni, 30 dni albo całość. Przycisk **✎** obok nazwy zmienia nazwę czujnika.
+- **Wykres** wybranego czujnika – wilgotność (niebieska linia) i bateria (pomarańczowa) za 24 h, 7 dni, 30 dni albo całość. Dotknięcie napisu „Bateria V” pod wykresem chowa albo pokazuje linię baterii (aplikacja to zapamiętuje). Przycisk **✎** obok nazwy zmienia nazwę czujnika.
 - **Stan połączenia** w prawym górnym rogu – zielona kropka i nazwa bazy = połączono. Gdy widać napis „połącz”, dotknij go.
 - **Ustawienia** (zwinięte na dole strony) – karty: Połączenie, karta wybranego czujnika, WiFi / MQTT, Dane i aplikacja (kopia, CSV, instalacja, język).
 
@@ -133,6 +133,8 @@ Kalibracja ustala, jaki odczyt to 0 % (sucho), a jaki 100 % (mokro). Zostaje po 
 2. W Ustawieniach, w karcie sondy, naciśnij **Zmierz teraz**, a potem **Ustaw sucho**.
 3. Podlej obficie i odczekaj ok. 10 minut.
 4. Naciśnij RST, połącz się, naciśnij **Zmierz teraz**, a potem **Ustaw mokro**.
+
+**Ręcznie:** jeśli znasz wartości (np. z innej sondy w tej samej ziemi), wpisz je w polach **Sucho (V)** i **Mokro (V)** w karcie czujnika (z bazą) albo w karcie sondy (bez bazy) i naciśnij **Zapisz kalibrację**. Można użyć przecinka albo kropki. Sucho musi być wyższe niż mokro; fabryczne wartości to 2,30 V (sucho) i 1,30 V (mokro). Aktualny odczyt w V widać w tej samej karcie („odczyt”), co pomaga dobrać wartości.
 
 Wynik zależy od docisku ziemi wokół sondy. Wbijaj ją zawsze tak samo głęboko i dociskaj ziemię wokół, bez szczelin powietrza. Nawozy i sól zawyżają odczyt.
 
@@ -213,5 +215,5 @@ Strona sama łączy się z ostatnio używaną bazą (także po odświeżeniu), w
 | Bluetooth po RST | bez bazy 2 min (dłużej przy połączonym telefonie); z bazą wyłączony |
 | Łączność z bazą | ESP-NOW 2,4 GHz, zasięg jak WiFi (zwykle kilka pokoi), ok. 0,2 s radia na pomiar |
 | Pamięć bazy | 28 672 pomiary, do 24 sond; zostaje po odłączeniu zasilania |
-| Oprogramowanie | 0.9.10 alpha (ESPHome); baza 0.1.1 alpha |
+| Oprogramowanie | 0.9.11 alpha (ESPHome); baza 0.1.1 alpha |
 | Obudowa | głowica nie jest wodoszczelna – nie zalewaj jej, wbijaj sondę tylko do linii |

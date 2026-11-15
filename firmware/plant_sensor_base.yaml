@@ -43,8 +43,8 @@
 # First flash over USB (it changes the flash layout); later updates over WiFi / web page.
 
 substitutions:
-  fw_version: "0.9.10 alpha"           # shown on the web page, in HA (device info), MQTT report and phone page
-  fw_short: "0.9.10a"                  # max 8 characters, sent to the hub
+  fw_version: "0.9.11 alpha"           # shown on the web page, in HA (device info), MQTT report and phone page
+  fw_short: "0.9.11a"                  # max 8 characters, sent to the hub
   # pins (defaults = v2 board with the SuperMini; overridden by board_*.yaml)
   pin_moist: GPIO0
   pin_vbat: GPIO1
@@ -299,6 +299,11 @@ esp32_ble_server:
                     { auto call = id(log_interval).make_call(); call.set_value(atof(p[1].c_str())); call.perform(); }
                     { auto call = id(report_every).make_call(); call.set_value(atof(p[2].c_str())); call.perform(); }
                     { auto call = id(service_timeout).make_call(); call.set_value(atof(p[3].c_str())); call.perform(); }
+                  } else if (cmd == "CAL" && p.size() >= 3) {   // CAL<US>dry V<US>wet V (empty = keep)
+                    float d = p[1].empty() ? NAN : atof(p[1].c_str()), w = p[2].empty() ? NAN : atof(p[2].c_str());
+                    if (d >= 0.2f && d <= 3.3f) { auto call = id(cal_dry).make_call(); call.set_value(d); call.perform(); }
+                    if (w >= 0.2f && w <= 3.3f) { auto call = id(cal_wet).make_call(); call.set_value(w); call.perform(); }
+                    id(g_cmd) = 3;                        // measure again with the new calibration
                   } else if (cmd == "OFF") {
                     id(g_cmd) = 11;                       // power off (after the reply)
                   } else if (cmd == "CLEARLOG") {

@@ -63,6 +63,8 @@
   .seg button.on { background: var(--accent); color: var(--accent-ink); }
   canvas { width: 100%; height: 230px; display: block; touch-action: pan-y; margin-top: 10px; }
   .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .legend button.lg { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+  .legend button.lg[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
   .legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
 
   /* settings (collapsed by default) */
@@ -119,7 +121,7 @@
     </div>
     <canvas id="chart"></canvas>
     <div class="legend"><span><i style="background:var(--moist)"></i><span data-t="lgMoist">Soil moisture %</span></span>
-      <span><i style="background:var(--batt)"></i><span data-t="lgBatt">Battery V</span></span></div>
+      <button class="lg" id="lgBatt" aria-pressed="true"><i style="background:var(--batt)"></i><span data-t="lgBatt">Battery V</span></button></div>
   </section>
 
   <details class="settings" id="settings">
@@ -154,6 +156,12 @@
         <button id="rDry" data-t="rDry">Dry = last reading</button>
         <button id="rWet" data-t="rWet">Wet = last reading</button>
       </div>
+      <p class="muted small" style="margin:12px 0 6px" data-t="calManual">Or type the values:</p>
+      <div class="form">
+        <label><span data-t="dryV">Dry (V)</span><input id="rDryV" type="text" inputmode="decimal" autocomplete="off" maxlength="6"></label>
+        <label><span data-t="wetV">Wet (V)</span><input id="rWetV" type="text" inputmode="decimal" autocomplete="off" maxlength="6"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="rCalSave" data-t="calSave">Save calibration</button></div>
       <p class="note" id="rState"></p>
       <details class="sub"><summary data-t="more">More</summary>
         <div class="row" style="margin-top:8px">
@@ -177,6 +185,12 @@
         <button id="bDry" data-t="setDry">Set dry</button>
         <button id="bWet" data-t="setWet">Set wet</button>
       </div>
+      <p class="muted small" style="margin:12px 0 6px" data-t="calManual">Or type the values:</p>
+      <div class="form">
+        <label><span data-t="dryV">Dry (V)</span><input id="fDryV" type="text" inputmode="decimal" autocomplete="off" maxlength="6"></label>
+        <label><span data-t="wetV">Wet (V)</span><input id="fWetV" type="text" inputmode="decimal" autocomplete="off" maxlength="6"></label>
+      </div>
+      <div class="row" style="margin-top:10px"><button id="bCalSave" data-t="calSave">Save calibration</button></div>
       <h3 data-t="hMeasure">Measuring</h3>
       <div class="form">
         <label><span data-t="logInt">Measure every (min)</span><input id="fLi" type="number" min="10" max="360" step="5"></label>
@@ -297,6 +311,8 @@ const T = {
     seenAgo: (s) => s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`,
     noContact: (a) => `no contact ${a}`, lowBatt: "charge", viaHub: "via the hub", direct: "directly",
     noProbes: "No sensor has reported yet. Probes find the hub at their next reading (or press RST on a probe).",
+    calManual: "Or type the values (the reading is shown above, in V):", dryV: "Dry (V)", wetV: "Wet (V)", calSave: "Save calibration",
+    calBad: "Dry must be higher than wet (both between 0.2 and 3.3 V).", calDone: "Calibration saved.",
     askName: (n) => `Name for ${n} (e.g. the plant it is in). Empty = the probe's own name.`, renameT: "Rename",
     sub: (n, when, how) => `${n} · ${when} · ${how}`, csvHead: "time_utc,local_time,soil_moisture_pct,battery_v"
   },
@@ -348,6 +364,8 @@ const T = {
     seenAgo: (s) => s < 90 ? "przed chwilą" : s < 5400 ? `${Math.round(s / 60)} min temu` : s < 172800 ? `${Math.round(s / 3600)} h temu` : `${Math.round(s / 86400)} dni temu`,
     noContact: (a) => `brak kontaktu ${a}`, lowBatt: "naładuj", viaHub: "przez bazę", direct: "bezpośrednio",
     noProbes: "Żaden czujnik jeszcze się nie zgłosił. Sondy znajdą bazę przy następnym pomiarze (albo naciśnij RST na sondzie).",
+    calManual: "Albo wpisz wartości ręcznie (odczyt w V widać wyżej):", dryV: "Sucho (V)", wetV: "Mokro (V)", calSave: "Zapisz kalibrację",
+    calBad: "Sucho musi być wyższe niż mokro (obie wartości od 0,2 do 3,3 V).", calDone: "Kalibracja zapisana.",
     askName: (n) => `Nazwa dla ${n} (np. roślina, w której jest). Puste = nazwa sondy.`, renameT: "Zmień nazwę",
     sub: (n, when, how) => `${n} · ${when} · ${how}`, csvHead: "czas_utc,czas_lokalny,wilgotnosc_gleby_proc,bateria_v"
   }
@@ -373,6 +391,7 @@ let mode = "none";          // "hub" | "probe" | "none" (not connected)
 let hubProbes = [];         // probe info from the hub
 let linkBusy = false, userClosed = false, retryN = 0, retryTimer = null, pollTimer = null;
 let persisted = true;
+let showBatt = (() => { try { return localStorage.getItem("ps-batt") !== "0"; } catch { return true; } })();
 
 // ------------------------------------------------------------------ storage: IndexedDB (+ old localStorage import)
 const DB = {
@@ -699,6 +718,8 @@ function remoteView() {
   $("rTitle").textContent = display(DB.get(p.name));
   if (document.activeElement !== $("rLi")) $("rLi").value = +p.pend && +p.pli ? p.pli : p.li;
   const pd = +p.pend && +p.pdry ? p.pdry : p.dry, pw = +p.pend && +p.pwet ? p.pwet : p.wet;
+  if (document.activeElement !== $("rDryV")) $("rDryV").value = (+pd).toFixed(3);
+  if (document.activeElement !== $("rWetV")) $("rWetV").value = (+pw).toFixed(3);
   $("rState").textContent = (+p.pend ? t("pendYes") : t("pendNo")) + ` ${t("dry")} ${pd} V · ${t("wet")} ${pw} V · ${t("raw")} ${p.raw} V`;
 }
 function directView() {
@@ -708,6 +729,8 @@ function directView() {
   if (!on) return;
   $("pTitle").textContent = display(DB.get(status.name));
   $("pMode").textContent = (status.mh ? t("modeNet") : t("modePhone")) + (status.svc === "1" ? " · " + t("svcOn") : "") + (status.fw ? " · fw " + status.fw : "");
+  if (document.activeElement !== $("fDryV")) $("fDryV").value = status.dry ? (+status.dry).toFixed(3) : "";
+  if (document.activeElement !== $("fWetV")) $("fWetV").value = status.wet ? (+status.wet).toFixed(3) : "";
   $("cDry").textContent = status.dry || "–"; $("cWet").textContent = status.wet || "–"; $("cRaw").textContent = status.raw || "–";
   $("bootHist").textContent = status.bh || "–";
   $("logFill").textContent = status.cap ? t("logFillTxt", +status.n, +status.cap) : "–";
@@ -748,7 +771,7 @@ function draw() {
   g.font = "11px system-ui, sans-serif"; g.fillStyle = col("--muted"); g.strokeStyle = col("--line"); g.lineWidth = 1;
   for (let p = 0; p <= 100; p += 25) { const y = Tp + ph - (p / 100) * ph; g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.textAlign = "right"; g.fillText(p + "%", L - 6, y + 4); }
   const vmin = 2.8, vmax = 3.6;
-  g.textAlign = "left"; for (let v = vmin; v <= vmax + 1e-6; v += 0.4) g.fillText(v.toFixed(1), L + pw + 6, Tp + ph - ((v - vmin) / (vmax - vmin)) * ph + 4);
+  if (showBatt) for (let v = vmin; v <= vmax + 1e-6; v += 0.4) g.textAlign = "left", g.fillText(v.toFixed(1), L + pw + 6, Tp + ph - ((v - vmin) / (vmax - vmin)) * ph + 4);
   if (recs.length < 2) { g.textAlign = "center"; g.fillText(recs.length ? t("oneReading") : t("noReadings"), L + pw / 2, Tp + ph / 2); return; }
   const t0 = rangeH ? from : recs[0].t, t1 = now, X = (ts) => L + ((ts - t0) / (t1 - t0)) * pw;
   const ticks = W < 520 ? 3 : 5;
@@ -758,7 +781,7 @@ function draw() {
   const gap = 3 * 60 * (DB.get(current).li || 60);
   const line = (key, color, w, y) => { g.strokeStyle = color; g.lineWidth = w; g.lineJoin = "round"; g.beginPath(); let prev = null;
     recs.forEach((r) => { const x = X(r.t), yy = y(r[key]); if (prev === null || r.t - prev > gap) g.moveTo(x, yy); else g.lineTo(x, yy); prev = r.t; }); g.stroke(); };
-  line("v", col("--batt"), 1.5, (v) => Tp + ph - ((Math.min(vmax, Math.max(vmin, v)) - vmin) / (vmax - vmin)) * ph);
+  if (showBatt) line("v", col("--batt"), 1.5, (v) => Tp + ph - ((Math.min(vmax, Math.max(vmin, v)) - vmin) / (vmax - vmin)) * ph);
   line("m", col("--moist"), 2.5, (m) => Tp + ph - (m / 100) * ph);
 }
 
@@ -829,6 +852,16 @@ $("bWeb").onclick = async () => {
 };
 $("rSave").onclick = () => remoteSet("", "");
 $("dRename").onclick = rename;
+function calValues(d, w) {   // checked [dry, wet] as strings with 3 decimals, or null
+  const dv = parseFloat(String(d).replace(",", ".")), wv = parseFloat(String(w).replace(",", "."));
+  if (!(dv >= 0.2 && dv <= 3.3 && wv >= 0.2 && wv <= 3.3 && dv > wv + 0.02)) { setErr(t("calBad")); return null; }
+  setErr(""); return [dv.toFixed(3), wv.toFixed(3)];
+}
+$("rCalSave").onclick = () => { const c = calValues($("rDryV").value, $("rWetV").value); if (c) remoteSet(c[0], c[1]); };
+$("bCalSave").onclick = async () => { const c = calValues($("fDryV").value, $("fWetV").value); if (!c) return; await probeCmd(["CAL", c[0], c[1]].join(US), 900); setState(t("calDone")); };
+const battView = () => { $("lgBatt").setAttribute("aria-pressed", String(showBatt)); };
+$("lgBatt").onclick = () => { showBatt = !showBatt; try { localStorage.setItem("ps-batt", showBatt ? "1" : "0"); } catch {} battView(); draw(); };
+battView();
 $("rDry").onclick = () => { if (confirm(t("askDry"))) remoteSet("raw", ""); };
 $("rWet").onclick = () => { if (confirm(t("askWet"))) remoteSet("", "raw"); };
 const hubCmd = async (parts, ask) => { const p = hubP(); if (!p || (ask && !confirm(ask))) return; await locked(async () => { await cmd(parts(p).join(US)); await sleep(200); await hubSync(); }); render(); };

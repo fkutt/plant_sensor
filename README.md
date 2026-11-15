@@ -29,7 +29,7 @@ Bluetooth, opcjonalnie baza (drugi ESP32-C3 na USB) i Home Assistant przez MQTT.
 
 | Element | Wersja |
 | --- | --- |
-| Firmware sondy | 0.9.10 alpha |
+| Firmware sondy | 0.9.11 alpha |
 | Firmware bazy | 0.1.1 alpha |
 | PCB | v2 (SuperMini na podstawkach) |
 
